@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 
 from clipfactory.backends.encoder.base import EncoderBackend, select_encoder
@@ -16,7 +17,9 @@ from clipfactory.db import Database
 from clipfactory.pipeline.context import Backends, StageContext
 from clipfactory.pipeline.ingest import is_url
 from clipfactory.pipeline.orchestrator import Orchestrator
-from clipfactory.schemas import Job, JobStatus, utcnow
+from clipfactory.queue.base import Queue
+from clipfactory.queue.inline import InlineQueue
+from clipfactory.schemas import Job, JobStatus, ReviewOverrides, StageName, utcnow
 from clipfactory.storage.local import LocalStorage
 
 
@@ -66,6 +69,25 @@ def build_encoder(settings: Settings) -> EncoderBackend:
     return select_encoder(settings.encoder, ffmpeg.list_encoders())
 
 
+def backend_ids(settings: Settings) -> dict[str, str]:
+    """Идентичность бэкендов из настроек — для config_hash без загрузки моделей."""
+    from clipfactory.backends.transcriber.mlx import mlx_available
+
+    tr = settings.transcriber
+    if tr == "auto":
+        tr = "mlx" if mlx_available() else "faster_whisper"
+    tr_model = "fake" if tr == "fake" else settings.whisper_model
+    llm = (
+        "fake"
+        if settings.llm_provider == "fake"
+        else f"anthropic/{settings.llm_model}/{settings.llm_effort}"
+    )
+    face = (
+        "fake" if settings.face_detector == "fake" else f"mediapipe/{settings.face_model_path.name}"
+    )
+    return {"transcriber": f"{tr}/{tr_model}", "llm": llm, "face": face}
+
+
 def new_job_id() -> str:
     return f"{utcnow():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
 
@@ -95,6 +117,7 @@ class App:
             llm_factory=self.llm_factory or (lambda: build_llm(s)),
             face_factory=self.face_factory or (lambda: build_face(s)),
             encoder_factory=self.encoder_factory or (lambda: build_encoder(s)),
+            ids=backend_ids(s),
         )
 
     # ------------------------------------------------------------ jobs
@@ -106,6 +129,16 @@ class App:
         job = Job(id=new_job_id(), campaign_id=campaign_id, source=source)
         return self.db.create_job(job)
 
+    def overrides_key(self, job_id: str) -> str:
+        return f"jobs/{job_id}/overrides.json"
+
+    def load_overrides(self, job_id: str) -> ReviewOverrides:
+        key = self.overrides_key(job_id)
+        if not self.storage.exists(key):
+            return ReviewOverrides()
+        with self.storage.open_read(key) as f:
+            return ReviewOverrides.model_validate_json(f.read())
+
     def context(self, job: Job) -> StageContext:
         return StageContext(
             job=job,
@@ -113,13 +146,47 @@ class App:
             settings=self.settings,
             storage=self.storage,
             backends=self.backends(),
+            overrides=self.load_overrides(job.id),
         )
 
-    def run_job(self, job_id: str) -> Job:
+    def run_job(
+        self, job_id: str, *, force_stage: StageName | None = None, no_cache: bool = False
+    ) -> Job:
         job = self.db.get_job(job_id)
         ctx = self.context(job)
-        Orchestrator(self.db).run(ctx)
+        Orchestrator(self.db).run(ctx, force_stage=force_stage, no_cache=no_cache)
         return self.db.get_job(job_id)
+
+    # ------------------------------------------------------------ queue
+
+    @cached_property
+    def queue(self) -> Queue:
+        if self.settings.queue == "rq":
+            from clipfactory.queue.rq import RQQueue
+
+            return RQQueue(self.settings.redis_url)
+        from clipfactory.worker import dispatch
+
+        return InlineQueue(lambda task: dispatch(self, task))
+
+    def enqueue_job(
+        self, job_id: str, *, force_stage: StageName | None = None, no_cache: bool = False
+    ) -> str:
+        from clipfactory.worker import make_run_task
+
+        self.db.set_job_status(job_id, JobStatus.queued)
+        task = make_run_task(
+            job_id, force_stage=force_stage.value if force_stage else None, no_cache=no_cache
+        )
+        return self.queue.enqueue(task)
+
+    def retry_job(self, job_id: str, *, force_stage: StageName | None = None) -> str:
+        """Повторить job: этапы с валидным манифестом не выполняются заново."""
+        job = self.db.get_job(job_id)
+        if job.status not in (JobStatus.failed, JobStatus.awaiting_review, JobStatus.queued):
+            if force_stage is None:
+                raise ValueError(f"job {job_id} is {job.status.value}; nothing to retry")
+        return self.enqueue_job(job_id, force_stage=force_stage)
 
     def job_summary(self, job_id: str) -> dict:
         job = self.db.get_job(job_id)
@@ -127,6 +194,7 @@ class App:
         return {
             "job": job.model_dump(mode="json"),
             "clips": [c.model_dump(mode="json") for c in clips],
+            "stage_runs": self.db.stage_runs(job_id),
             "dir": str(self.storage.local_path(f"jobs/{job_id}/source.mp4").parent),
         }
 

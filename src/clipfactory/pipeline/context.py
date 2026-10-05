@@ -63,7 +63,15 @@ class Backends:
     llm_factory: Callable[[], LLMProvider]
     face_factory: Callable[[], FaceDetector]
     encoder_factory: Callable[[], EncoderBackend]
+    # Идентичность бэкенда для config_hash без загрузки модели: {"llm": "anthropic/claude-..."}
+    ids: dict[str, str] = field(default_factory=dict)
     _cache: dict[str, Any] = field(default_factory=dict)
+
+    def identity(self, kind: str) -> str:
+        if kind in self.ids:
+            return self.ids[kind]
+        obj = getattr(self, kind)
+        return f"{obj.name}/{getattr(obj, 'model', '')}"
 
     def _get(self, name: str, factory: Callable[[], Any]) -> Any:
         if name not in self._cache:

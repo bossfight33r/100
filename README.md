@@ -39,7 +39,12 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 |---|---|
 | `cf capabilities` | ffmpeg, ffprobe, энкодеры, платформа, доступные транскриберы |
 | `cf run SOURCE --campaign ID` | синхронно выполнить весь pipeline (файл или URL) |
-| `cf status JOB_ID` | статус job, упавший этап, клипы |
+| `cf status JOB_ID` | статус job, упавший этап, этапы (cache/completed), клипы |
+| `cf enqueue SOURCE --campaign ID` | создать job и поставить в очередь (`CF_QUEUE=rq`) |
+| `cf retry JOB_ID [--force-stage STAGE]` | повторить с первого невалидного этапа |
+| `cf worker [--burst]` | RQ-воркер; при старте восстанавливает потерянные job из SQLite |
+
+Флаги `run`: `--force-stage STAGE` (перезапустить этап и всё после), `--no-cache`.
 
 Глобальные флаги: `--verbose`, `--json`. Полный список команд пополняется по фазам (см. docs/STATUS.md).
 

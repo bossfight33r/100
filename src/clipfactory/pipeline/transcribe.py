@@ -15,8 +15,7 @@ class TranscribeStage:
     version = 1
 
     def config(self, ctx: StageContext) -> dict[str, Any]:
-        t = ctx.backends.transcriber
-        return {"backend": t.name, "model": t.model, "language": ctx.campaign.language}
+        return {"backend": ctx.backends.identity("transcriber"), "language": ctx.campaign.language}
 
     def input_keys(self, ctx: StageContext) -> list[str]:
         return [ctx.key("source.mp4")]

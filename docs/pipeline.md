@@ -21,6 +21,22 @@ jobs/{job_id}/logs/{stage}[-{clip_id}].log      # полный stderr ffmpeg
 
 После render клипы записываются в таблицу `clips`, job → `awaiting_review`.
 
+## Манифесты и кеш
+
+`jobs/{id}/manifest.json` (пишет только оркестратор): для каждого этапа `stage, stage_version, input_hashes, config_hash, output_hashes, started_at, completed_at, status`.
+
+Этап пропускается (cache hit), только если одновременно:
+1. есть запись со `status=completed`;
+2. `stage_version` совпадает с кодом (повышай `version` при изменении логики этапа);
+3. `config_hash` = sha256 от `stage.config(ctx)` (бэкенд, модель, параметры кампании, промпт, overrides);
+4. `input_hashes` совпадают с текущими sha256 входных артефактов (для ingest — sha256 исходного файла или URL);
+5. все выходы существуют и их sha256 совпадают;
+6. `stage.validate()` проходит.
+
+Перед запуском этап удаляется из манифеста, после успешной валидации записывается снова: прерванный этап никогда не считается готовым.
+
+Перезапуск: `cf retry JOB_ID` — с первого невалидного этапа; `--force-stage reframe` — reframe и всё после; `cf run ... --no-cache` — всё заново. Каждое выполнение/пропуск пишется в `stage_runs` (`cached=1` для кеша).
+
 ## Ошибки
 
 `orchestrator.classify_error` → `error_type`, `retryable` в `jobs`. ffmpeg-ошибки не retryable (детерминированы), таймауты и сеть — retryable. В сообщении — последние 30 строк stderr и путь к логу.

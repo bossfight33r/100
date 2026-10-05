@@ -324,9 +324,8 @@ class SelectStage:
 
     def config(self, ctx: StageContext) -> dict[str, Any]:
         c = ctx.campaign
-        llm = ctx.backends.llm
         return {
-            "llm": [llm.name, llm.model],
+            "llm": ctx.backends.identity("llm"),
             "prompt_sha": hashlib.sha256(load_prompt("highlights.md").encode()).hexdigest(),
             "clip_min_sec": c.clip_min_sec,
             "clip_max_sec": c.clip_max_sec,

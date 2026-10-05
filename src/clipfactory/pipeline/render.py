@@ -172,12 +172,11 @@ class RenderStage:
 
     def config(self, ctx: StageContext) -> dict[str, Any]:
         enc = ctx.backends.encoder
-        llm = ctx.backends.llm
         return {
             "encoder": enc.video_args(fps=ctx.settings.output_fps),
             "fps": ctx.settings.output_fps,
             "fonts_dir": str(ctx.settings.caption_fonts_dir or ""),
-            "llm": [llm.name, llm.model],
+            "llm": ctx.backends.identity("llm"),
             "meta_prompt_sha": hashlib.sha256(load_prompt("metadata.md").encode()).hexdigest(),
             "platforms": [p.value for p in ctx.campaign.platforms],
             "tags": ctx.campaign.must_include_tags,

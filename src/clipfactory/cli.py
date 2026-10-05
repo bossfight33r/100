@@ -87,6 +87,15 @@ def _print_summary(app_, job_id: str) -> None:
         return
     job = summary["job"]
     lines = [f"Job {job['id']}  [{job['status']}]  кампания={job['campaign_id']}"]
+    runs = summary.get("stage_runs") or []
+    if runs:
+        last = {}
+        for r in runs:
+            last[r["stage"]] = r
+        lines.append(
+            "  этапы: "
+            + ", ".join(f"{k}={'cache' if v['cached'] else v['status']}" for k, v in last.items())
+        )
     if job["status"] == "failed":
         lines.append(
             f"  упал этап: {job['failed_stage']}  ({job['error_type']}, retryable={job['retryable']})"
@@ -101,10 +110,30 @@ def _print_summary(app_, job_id: str) -> None:
     typer.echo("\n".join(lines))
 
 
+ForceStage = Annotated[
+    str | None,
+    typer.Option("--force-stage", help="Перезапустить этап и все последующие (ingest…render)"),
+]
+NoCache = Annotated[bool, typer.Option("--no-cache", help="Игнорировать кеш всех этапов")]
+
+
+def _stage(value: str | None):
+    from clipfactory.schemas import StageName
+
+    if value is None:
+        return None
+    try:
+        return StageName(value)
+    except ValueError:
+        _fail(f"unknown stage {value!r}; one of: {', '.join(s.value for s in StageName)}")
+
+
 @app.command()
 def run(
     source: Annotated[str, typer.Argument(help="Локальный файл или URL")],
     campaign: Annotated[str, typer.Option("--campaign", "-c", help="id кампании")],
+    force_stage: ForceStage = None,
+    no_cache: NoCache = False,
 ) -> None:
     """Синхронно выполнить весь pipeline для SOURCE."""
     from clipfactory.pipeline.orchestrator import JobFailed
@@ -114,11 +143,60 @@ def run(
     if not _state["json"]:
         typer.echo(f"Job {job.id} создан, запускаю pipeline...")
     try:
-        app_.run_job(job.id)
+        app_.run_job(job.id, force_stage=_stage(force_stage), no_cache=no_cache)
     except JobFailed:
         _print_summary(app_, job.id)
         raise typer.Exit(1) from None
     _print_summary(app_, job.id)
+
+
+@app.command()
+def enqueue(
+    source: Annotated[str, typer.Argument(help="Локальный файл или URL")],
+    campaign: Annotated[str, typer.Option("--campaign", "-c", help="id кампании")],
+    no_cache: NoCache = False,
+) -> None:
+    """Создать job и поставить в очередь (CF_QUEUE=rq — выполнит `cf worker`)."""
+    app_ = _app()
+    job = app_.create_job(source, campaign)
+    task_id = app_.enqueue_job(job.id, no_cache=no_cache)
+    _out({"job_id": job.id, "task_id": task_id}, f"Job {job.id} поставлен в очередь ({task_id})")
+
+
+@app.command()
+def retry(
+    job_id: Annotated[str, typer.Argument(help="id job")],
+    force_stage: ForceStage = None,
+) -> None:
+    """Повторить job с первого невалидного этапа (валидный кеш не пересчитывается)."""
+    from clipfactory.db import NotFound
+
+    app_ = _app()
+    try:
+        app_.retry_job(job_id, force_stage=_stage(force_stage))
+    except (NotFound, ValueError) as e:
+        _fail(str(e))
+    _print_summary(app_, job_id)
+    if app_.db.get_job(job_id).status.value == "failed":
+        raise typer.Exit(1)
+
+
+@app.command()
+def worker(
+    burst: Annotated[bool, typer.Option("--burst", help="Выйти, когда очередь пуста")] = False,
+) -> None:
+    """RQ-воркер: восстанавливает потерянные job из SQLite и обрабатывает очередь."""
+    from clipfactory.worker import run_worker
+
+    app_ = _app()
+    if app_.settings.queue != "rq":
+        typer.secho(
+            "CF_QUEUE != rq: воркер всё равно слушает Redis", fg=typer.colors.YELLOW, err=True
+        )
+    try:
+        run_worker(app_, burst=burst)
+    except Exception as e:  # redis недоступен и т.п.
+        _fail(f"worker stopped: {e}")
 
 
 @app.command()

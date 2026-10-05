@@ -1,5 +1,13 @@
 # Changelog
 
+## [Фаза 2] Durable orchestration
+
+- `manifest.json` на job, кеш этапа по stage_version + config_hash + input/output sha256 + validate().
+- Resume с первого невалидного этапа, `--force-stage`, `--no-cache`, запись `stage_runs` (cached/completed/failed/abandoned).
+- `RQQueue` (Redis/RQ), `worker.py` (`execute_task`, `recover`, SimpleWorker), CLI `cf enqueue`, `cf retry`, `cf worker`.
+- Восстановление после падения воркера и потери Redis из SQLite.
+- Тесты: acceptance «сломанный render → retry без повторного ingest/transcribe/select», инвалидация по подмене/удалению выходов и смене конфига, recover на fakeredis.
+
 ## [Фаза 1] Local pipeline
 
 - Этапы ingest, transcribe, select, reframe, captions, render (`pipeline/`), оркестратор, сервисный слой `services.App`.

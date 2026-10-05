@@ -299,6 +299,15 @@ class Database:
                  (error_message or "")[:4000] or None, run_id),
             )  # fmt: skip
 
+    def abandon_stage_runs(self, job_id: str) -> None:
+        """Пометить «running» записи, оставшиеся от упавшего воркера."""
+        with self.connect() as c:
+            c.execute(
+                "UPDATE stage_runs SET status='abandoned', completed_at=? "
+                "WHERE job_id=? AND status='running'",
+                (_ts(utcnow()), job_id),
+            )
+
     def stage_runs(self, job_id: str) -> list[dict[str, Any]]:
         with self.connect() as c:
             rows = c.execute(

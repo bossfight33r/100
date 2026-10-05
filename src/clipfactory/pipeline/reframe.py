@@ -163,7 +163,7 @@ class ReframeStage:
 
     def config(self, ctx: StageContext) -> dict[str, Any]:
         return {
-            "face": ctx.backends.face.name,
+            "face": ctx.backends.identity("face"),
             "analysis_fps": ctx.settings.analysis_fps,
             "params": self.params.__dict__,
             "overrides": ctx.overrides.crop_center_x,

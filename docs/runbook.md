@@ -20,6 +20,20 @@
 | `source has no audio track` | в видео нет звука | транскрибировать нечего; не retryable |
 | `LLM returned no usable highlights` | модель не нашла моменты или ответила не JSON 3 раза | проверить `notes` кампании, длину видео; `cf retry` |
 
+## Воркер и очередь
+
+```bash
+redis-server &                      # или brew services start redis
+export CF_QUEUE=rq
+.venv/bin/cf enqueue video.mp4 -c example
+.venv/bin/cf worker                 # Ctrl+C для остановки; --burst — выйти, когда очередь пуста
+```
+
+- Воркер — `rq.SimpleWorker` (без fork: на macOS fork + ObjC/Metal небезопасен).
+- При старте воркер чистит мёртвые started-задачи RQ и ставит заново все job из SQLite в статусах `queued`…`rendering`, у которых нет живой задачи. Потеря Redis не теряет состояние: оно в SQLite + манифестах.
+- Retry: `cf retry JOB_ID` — валидные этапы берутся из кеша. Повторять имеет смысл при `retryable=true` (сеть, таймаут, rate limit); при `false` сначала исправить причину.
+- Отмена: `Queue.cancel` снимает только ещё не начатую задачу.
+
 ## Прогон без внешних API
 
 ```bash
