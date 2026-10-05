@@ -92,7 +92,8 @@ class AdminMiddleware(BaseMiddleware):
 HELP = (
     "Пришлите видеофайл, ссылку (YouTube или прямой URL) или абсолютный путь к файлу на этой машине.\n"
     "Потом выберите кампанию — я нарежу клипы и пришлю их на ревью.\n\n"
-    "/jobs — последние job\n/status JOB_ID — статус и клипы"
+    "/jobs — последние job\n/status JOB_ID — статус и клипы\n"
+    "/publish JOB_ID — запланировать и опубликовать одобренные клипы"
 )
 
 
@@ -269,6 +270,23 @@ class BotController:
         lines = [f"<code>{j.id}</code> · {j.campaign_id} · {j.status.value}" for j in jobs]
         return [Reply("\n".join(lines))]
 
+    def publish(self, job_id: str) -> list[Out]:
+        """Запланировать и опубликовать одобренные клипы (блокирующий вызов — в потоке)."""
+        from clipfactory.pipeline.publish import PublishService, PublishServiceError
+        from clipfactory.publish.scheduler import SchedulingError
+
+        try:
+            svc = PublishService(self.app)
+            svc.schedule_job(job_id)
+            svc.publish_job(job_id)
+        except (PublishServiceError, SchedulingError, NotFound) as e:
+            return [Reply(f"Не получилось: {safe_error(str(e))}")]
+        lines = []
+        for p in self.app.db.list_publications(job_id=job_id):
+            when = p.scheduled_at.strftime("%d.%m %H:%M UTC") if p.scheduled_at else "-"
+            lines.append(f"{p.clip_id} → {p.account_id}: {when} [{p.status.value}]")
+        return [Reply("\n".join(lines) or "Нечего публиковать.")]
+
     def after_job(self, job_id: str) -> list[Out]:
         """Что отправить, когда job дошёл до терминального статуса."""
         job = self.app.db.get_job(job_id)
@@ -363,6 +381,14 @@ def build_router(ctl: BotController, rt: Runtime, inbox: Path) -> Router:
             await message.answer("Использование: /status JOB_ID")
             return
         await send_outs(bot, message.chat.id, ctl.status(command.args.strip()), ctl, rt)
+
+    @router.message(Command("publish"))
+    async def _publish(message: Message, bot: Bot, command: CommandObject) -> None:
+        if not command.args:
+            await message.answer("Использование: /publish JOB_ID")
+            return
+        outs = await asyncio.to_thread(ctl.publish, command.args.strip())
+        await send_outs(bot, message.chat.id, outs, ctl, rt)
 
     @router.message(F.video | F.document)
     async def _file(message: Message, bot: Bot) -> None:

@@ -211,6 +211,60 @@ def status(job_id: Annotated[str, typer.Argument(help="id job")]) -> None:
         _fail(str(e))
 
 
+auth_app = typer.Typer(help="OAuth для собственных аккаунтов")
+app.add_typer(auth_app, name="auth")
+
+
+@auth_app.command("youtube")
+def auth_youtube(
+    account: Annotated[str, typer.Option("--account", "-a", help="id аккаунта из accounts.yaml")],
+) -> None:
+    """OAuth для своего YouTube-канала: откроет браузер, токен -> data/secrets/{token_ref}.json."""
+    from clipfactory.publish.base import PublishError
+    from clipfactory.publish.youtube import authorize
+
+    app_ = _app()
+    acc = app_.settings.accounts.get(account)
+    if acc is None:
+        _fail(f"unknown account {account!r}")
+    try:
+        path = authorize(acc, app_.settings.youtube_client_secrets, app_.settings.secrets_dir)
+    except PublishError as e:
+        _fail(str(e))
+    _out({"account": account, "token_file": str(path)}, f"Готово: токен сохранён в {path} (600)")
+
+
+@app.command()
+def publish(
+    job_id: Annotated[str, typer.Argument(help="id job")],
+    schedule_only: Annotated[
+        bool, typer.Option("--schedule-only", help="Только распределить по слотам, не загружать")
+    ] = False,
+) -> None:
+    """Запланировать одобренные клипы по слотам аккаунтов и опубликовать/экспортировать."""
+    from clipfactory.pipeline.publish import PublishService, PublishServiceError
+    from clipfactory.publish.scheduler import SchedulingError
+
+    app_ = _app()
+    svc = PublishService(app_)
+    try:
+        svc.schedule_job(job_id)
+        if not schedule_only:
+            svc.publish_job(job_id)
+    except (PublishServiceError, SchedulingError) as e:
+        _fail(str(e))
+    pubs = app_.db.list_publications(job_id=job_id)
+    if _state["json"]:
+        _out([p.model_dump(mode="json") for p in pubs])
+        return
+    for p in pubs:
+        when = p.scheduled_at.isoformat(timespec="minutes") if p.scheduled_at else "-"
+        typer.echo(
+            f"{p.clip_id} -> {p.account_id} ({p.platform.value})  {when}  [{p.status.value}]  "
+            f"{p.url or p.error or ''}"
+        )
+
+
 @app.command()
 def bot() -> None:
     """Telegram-бот (control plane). Нужны TELEGRAM_BOT_TOKEN и CF_ADMIN_IDS."""

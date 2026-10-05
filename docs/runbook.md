@@ -48,6 +48,28 @@ export CF_QUEUE=rq
 - Ошибка показывает упавший этап, тип ошибки и кнопку «Повторить» (retry с кешем). Текст ошибки проходит через редактирование секретов и обрезается.
 - С `CF_QUEUE=inline` pipeline идёт в потоке процесса бота; с `CF_QUEUE=rq` бот только ставит задачу — нужен запущенный `cf worker`.
 
+## YouTube
+
+Однократная настройка (Google Cloud Console):
+1. Создать проект → включить **YouTube Data API v3**.
+2. OAuth consent screen: External, добавить себя в Test users.
+3. Credentials → Create OAuth client ID → **Desktop app** → скачать JSON в `data/secrets/youtube_client_secret.json` (или путь в `CF_YOUTUBE_CLIENT_SECRETS`).
+4. В `config/accounts.yaml` у аккаунта `platform: youtube`, `token_ref: yt_main`.
+5. `.venv/bin/cf auth youtube --account yt_main` — откроется браузер, токен сохранится в `data/secrets/yt_main.json` (права 600). Refresh-токен обновляется автоматически.
+
+Публикация: `cf publish JOB_ID` (или `/publish JOB_ID` в боте). В YouTube видео загружается сразу как `private` с `publishAt` = слот; публикует сам YouTube. Слоты: окна `posting_windows` в `timezone` аккаунта, не больше `daily_limit` в сутки, шаг ≥ 90 мин, не раньше чем через 20 мин.
+
+| Ошибка | Что делать |
+|---|---|
+| `YouTube quota exceeded` | дневная квота API (по умолчанию 10 000 единиц, загрузка стоит ~1600 → ~6 видео/сутки). Публикация остаётся `scheduled`; повторить `cf publish JOB_ID` завтра или запросить квоту |
+| `auth/permission error 401/403` | токен отозван или нет прав — `cf auth youtube --account ID` заново |
+| `no token for ...` | не выполнен `cf auth youtube` |
+| `clip is rejected` | отклонённые клипы не публикуются никогда (проверка и при планировании, и перед загрузкой) |
+
+## TikTok / Instagram
+
+Официальная публикация через API требует одобренного приложения, поэтому сейчас `cf publish` собирает **export-пакет**: `data/exports/{platform}/{account}/{локальная дата_время}_{publication_id}/` с `video.mp4`, `thumb.jpg`, `caption.txt`, `meta.json`. Залить вручную в указанное время. Статус публикации — `exported`.
+
 ## Прогон без внешних API
 
 ```bash

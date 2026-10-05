@@ -1,5 +1,13 @@
 # Changelog
 
+## [Фаза 4] Publishing
+
+- `publish/scheduler.py`: слоты по posting_windows/timezone/daily_limit, шаг 90 мин, DST.
+- `publish/youtube.py`: OAuth (`cf auth youtube`), токен 600 в `data/secrets/`, resumable upload с ретраями, private + publishAt, классификация квоты/auth-ошибок.
+- `publish/export.py`: пакеты для ручной заливки в TikTok/Instagram.
+- `pipeline/publish.py`: идемпотентное планирование одобренных клипов, публикация, запрет rejected (двойная проверка), `mark_due_published`.
+- CLI `cf auth youtube`, `cf publish`; бот `/publish`.
+
 ## [Фаза 3] Review + Telegram
 
 - `pipeline/review.py`: approve, reject, edit metadata (с повторным применением правил кампании), rerender captions/crop через `overrides.json`, журнал `review_actions`.

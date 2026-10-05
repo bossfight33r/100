@@ -43,6 +43,8 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 | `cf enqueue SOURCE --campaign ID` | создать job и поставить в очередь (`CF_QUEUE=rq`) |
 | `cf retry JOB_ID [--force-stage STAGE]` | повторить с первого невалидного этапа |
 | `cf worker [--burst]` | RQ-воркер; при старте восстанавливает потерянные job из SQLite |
+| `cf auth youtube --account ID` | OAuth своего YouTube-канала, токен в `data/secrets/` (600) |
+| `cf publish JOB_ID [--schedule-only]` | распределить одобренные клипы по слотам и загрузить/экспортировать |
 | `cf bot` | Telegram-бот ревью (нужны `TELEGRAM_BOT_TOKEN`, `CF_ADMIN_IDS`) |
 | `cf review JOB_ID CLIP_ID approve\|reject` | быстрое ревью из терминала |
 
