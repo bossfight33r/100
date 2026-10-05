@@ -163,6 +163,9 @@ class ClipMeta(_Model):
     candidate: ClipCandidate
     platforms: list[PlatformClipMeta]
     duration: float
+    meta_hash: str = (
+        ""  # hash(кандидат + конфиг метаданных) — для переиспользования при перерендере
+    )
 
 
 class CropKeyframe(_Model):

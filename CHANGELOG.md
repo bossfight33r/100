@@ -1,5 +1,13 @@
 # Changelog
 
+## [Фаза 3] Review + Telegram
+
+- `pipeline/review.py`: approve, reject, edit metadata (с повторным применением правил кампании), rerender captions/crop через `overrides.json`, журнал `review_actions`.
+- render переиспользует метаданные при перерендере (`ClipMeta.meta_hash`).
+- Бот aiogram 3: `BotController` + router, AdminMiddleware по `CF_ADMIN_IDS`, приём файла/URL/пути, выбор кампании, прогресс одним сообщением, карточки клипов, кнопки ревью, retry упавшего этапа; секреты редактируются.
+- CLI: `cf bot`, `cf review`.
+- Тесты: сервис ревью, контроллер, полный цикл через `Dispatcher.feed_update` на фейковой сессии.
+
 ## [Фаза 2] Durable orchestration
 
 - `manifest.json` на job, кеш этапа по stage_version + config_hash + input/output sha256 + validate().

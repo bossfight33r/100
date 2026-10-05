@@ -16,7 +16,7 @@ from clipfactory.log import get_logger
 from clipfactory.media import ffmpeg
 from clipfactory.media.filters import render_filtergraph
 from clipfactory.media.probe import ProbeError, probe
-from clipfactory.pipeline.context import StageContext, ValidationFailed
+from clipfactory.pipeline.context import StageContext, ValidationFailed, config_hash
 from clipfactory.pipeline.select import load_prompt
 from clipfactory.schemas import (
     Campaign,
@@ -170,18 +170,36 @@ class RenderStage:
     name = StageName.render
     version = 1
 
-    def config(self, ctx: StageContext) -> dict[str, Any]:
-        enc = ctx.backends.encoder
+    @staticmethod
+    def meta_config(ctx: StageContext) -> dict[str, Any]:
         return {
-            "encoder": enc.video_args(fps=ctx.settings.output_fps),
-            "fps": ctx.settings.output_fps,
-            "fonts_dir": str(ctx.settings.caption_fonts_dir or ""),
             "llm": ctx.backends.identity("llm"),
             "meta_prompt_sha": hashlib.sha256(load_prompt("metadata.md").encode()).hexdigest(),
             "platforms": [p.value for p in ctx.campaign.platforms],
             "tags": ctx.campaign.must_include_tags,
             "mentions": ctx.campaign.mentions,
             "forbidden": ctx.campaign.forbidden,
+            "notes": ctx.campaign.notes,
+        }
+
+    @staticmethod
+    def reusable_meta(ctx: StageContext, key: str, meta_hash: str) -> list[PlatformClipMeta] | None:
+        """Перерендер видео не должен перегенерировать метаданные (LLM недетерминирована)."""
+        if not ctx.storage.exists(key):
+            return None
+        try:
+            old = ctx.read_model(key, ClipMeta)
+        except ValueError:
+            return None
+        return old.platforms if old.meta_hash == meta_hash else None
+
+    def config(self, ctx: StageContext) -> dict[str, Any]:
+        enc = ctx.backends.encoder
+        return {
+            "encoder": enc.video_args(fps=ctx.settings.output_fps),
+            "fps": ctx.settings.output_fps,
+            "fonts_dir": str(ctx.settings.caption_fonts_dir or ""),
+            **self.meta_config(ctx),
         }
 
     def input_keys(self, ctx: StageContext) -> list[str]:
@@ -245,11 +263,22 @@ class RenderStage:
             clip_text = " ".join(
                 w.text for w in transcript.words if cand.start <= w.start < cand.end
             )
-            metas = generate_meta(ctx.backends.llm, ctx.campaign, cand, clip_text)
             meta_key = ctx.clip_key(cand.id, "meta.json")
+            meta_hash = config_hash(
+                {"candidate": cand.model_dump(mode="json"), "cfg": self.meta_config(ctx)}
+            )
+            metas = self.reusable_meta(ctx, meta_key, meta_hash)
+            if metas is None:
+                metas = generate_meta(ctx.backends.llm, ctx.campaign, cand, clip_text)
             ctx.write_model(
                 meta_key,
-                ClipMeta(clip_id=cand.id, candidate=cand, platforms=metas, duration=cand.duration),
+                ClipMeta(
+                    clip_id=cand.id,
+                    candidate=cand,
+                    platforms=metas,
+                    duration=cand.duration,
+                    meta_hash=meta_hash,
+                ),  # fmt: skip
             )
             outputs += [video_key, thumb_key, meta_key]
             log.info("render.clip_done", job_id=ctx.job.id, clip_id=cand.id, duration=cand.duration)

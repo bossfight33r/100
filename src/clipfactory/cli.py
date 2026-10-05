@@ -211,5 +211,40 @@ def status(job_id: Annotated[str, typer.Argument(help="id job")]) -> None:
         _fail(str(e))
 
 
+@app.command()
+def bot() -> None:
+    """Telegram-бот (control plane). Нужны TELEGRAM_BOT_TOKEN и CF_ADMIN_IDS."""
+    from clipfactory.bot.main import BotConfigError, main
+
+    app_ = _app()
+    try:
+        main(app_)
+    except BotConfigError as e:
+        _fail(str(e))
+
+
+@app.command()
+def review(
+    job_id: Annotated[str, typer.Argument(help="id job")],
+    clip_id: Annotated[str, typer.Argument(help="id клипа, например c01")],
+    action: Annotated[str, typer.Argument(help="approve | reject")],
+) -> None:
+    """Быстрое ревью из терминала (основной интерфейс ревью — бот)."""
+    from clipfactory.pipeline.review import ReviewError, ReviewService
+
+    app_ = _app()
+    svc = ReviewService(app_)
+    try:
+        if action == "approve":
+            svc.approve(job_id, clip_id)
+        elif action == "reject":
+            svc.reject(job_id, clip_id)
+        else:
+            _fail("action must be approve or reject")
+    except ReviewError as e:
+        _fail(str(e))
+    _print_summary(app_, job_id)
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()

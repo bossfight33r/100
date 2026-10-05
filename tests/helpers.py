@@ -37,3 +37,26 @@ def make_app(tmp_path: Path, *, llm=None, face=None, transcriber=None, **overrid
         llm_factory=lambda: llm,
         face_factory=lambda: face,
     )
+
+
+FAST_CAMPAIGN = """
+id: fast
+name: Fast test campaign
+rate_per_1k_views: 2
+platforms: [youtube, tiktok]
+clip_min_sec: 8
+clip_max_sec: 12
+clip_count: 2
+language: ru
+must_include_tags: ["#shorts"]
+accounts: [yt_main, tt_main]
+"""
+
+
+def make_fast_app(tmp_path: Path, **kwargs) -> App:
+    """App с быстрой кампанией `fast` (клипы 8–12 с) для тестов ревью/бота/публикации."""
+    cdir = tmp_path / "campaigns"
+    cdir.mkdir(parents=True, exist_ok=True)
+    (cdir / "fast.yaml").write_text(FAST_CAMPAIGN, encoding="utf-8")
+    kwargs.setdefault("llm", FakeLLM(clip_len=10, per_chunk=3))
+    return make_app(tmp_path, campaigns_dir=cdir, **kwargs)
