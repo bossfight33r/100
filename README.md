@@ -38,6 +38,8 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 | Команда | Что делает |
 |---|---|
 | `cf capabilities` | ffmpeg, ffprobe, энкодеры, платформа, доступные транскриберы |
+| `cf run SOURCE --campaign ID` | синхронно выполнить весь pipeline (файл или URL) |
+| `cf status JOB_ID` | статус job, упавший этап, клипы |
 
 Глобальные флаги: `--verbose`, `--json`. Полный список команд пополняется по фазам (см. docs/STATUS.md).
 

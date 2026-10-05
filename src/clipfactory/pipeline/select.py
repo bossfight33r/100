@@ -81,7 +81,7 @@ def build_chunks(transcript: Transcript, chunk_sec: float, overlap_sec: float) -
 # ---------------------------------------------------------------- LLM output
 
 
-def _num(v: object, default: float) -> float:
+def _num(v: object, default: float | None) -> float | None:
     try:
         f = float(v)  # type: ignore[arg-type]
     except (TypeError, ValueError):
@@ -99,11 +99,14 @@ def sanitize(raw: object, lo: float, hi: float) -> list[RawHighlight]:
     for it in items:
         if not isinstance(it, dict):
             continue
-        s = max(lo, _num(it.get("start_time"), -1))
-        e = min(hi, _num(it.get("end_time"), -1))
-        if s < 0 or e <= s:
+        s_raw = _num(it.get("start_time"), None)
+        e_raw = _num(it.get("end_time"), None)
+        if s_raw is None or e_raw is None or e_raw <= s_raw:
             continue
-        score = int(max(0, min(100, _num(it.get("score"), 0))))
+        s, e = max(lo, s_raw), min(hi, e_raw)
+        if e <= s:
+            continue
+        score = int(max(0, min(100, _num(it.get("score"), 0) or 0)))
         out.append(
             RawHighlight(
                 start=s,

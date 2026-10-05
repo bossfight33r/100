@@ -25,15 +25,17 @@ class MediaPipeFaceDetector:
         try:
             import mediapipe as mp
             from mediapipe.tasks.python import BaseOptions, vision
-        except ImportError as e:  # pragma: no cover
-            raise FaceDetectorError("mediapipe is not installed") from e
+
+            options = vision.FaceDetectorOptions(
+                base_options=BaseOptions(model_asset_path=str(model_path)),
+                running_mode=vision.RunningMode.IMAGE,
+                min_detection_confidence=min_confidence,
+            )
+            self._detector = vision.FaceDetector.create_from_options(options)
+        except (ImportError, OSError, RuntimeError) as e:
+            # на Linux без libEGL MediaPipe падает с OSError — это не временная ошибка
+            raise FaceDetectorError(f"cannot initialize MediaPipe face detector: {e}") from e
         self._mp = mp
-        options = vision.FaceDetectorOptions(
-            base_options=BaseOptions(model_asset_path=str(model_path)),
-            running_mode=vision.RunningMode.IMAGE,
-            min_detection_confidence=min_confidence,
-        )
-        self._detector = vision.FaceDetector.create_from_options(options)
 
     def detect(self, frame: np.ndarray, t: float) -> list[FaceBox]:
         h, w = frame.shape[:2]
