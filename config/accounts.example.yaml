@@ -1,0 +1,16 @@
+# Скопируй в config/accounts.yaml. Токены здесь НЕ хранятся:
+# token_ref — имя файла в data/secrets/ (создаётся командой `cf auth youtube --account ID`).
+accounts:
+  - id: yt_main
+    platform: youtube
+    name: Мой YouTube канал
+    token_ref: yt_main
+    daily_limit: 3
+    posting_windows: ["09:00-12:00", "18:00-22:00"]
+    timezone: Europe/Moscow
+  - id: tt_main
+    platform: tiktok
+    name: Мой TikTok
+    daily_limit: 2
+    posting_windows: ["12:00-21:00"]
+    timezone: Europe/Moscow

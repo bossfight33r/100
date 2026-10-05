@@ -1,0 +1,507 @@
+"""SQLite — source of truth для метаданных.
+
+Доступ только через Database (SQL в одном месте), чтобы позже заменить на PostgreSQL
+без изменения контрактов pipeline. Время хранится в ISO-8601 UTC.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from clipfactory.schemas import (
+    Account,
+    Campaign,
+    ClipRecord,
+    ClipStatus,
+    Job,
+    JobStatus,
+    PlatformClipMeta,
+    Publication,
+    PublicationStatus,
+    ReviewAction,
+    StageName,
+    StatsSnapshot,
+    utcnow,
+)
+
+SCHEMA_VERSION = 1
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
+
+CREATE TABLE IF NOT EXISTS campaigns (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS accounts (
+    id TEXT PRIMARY KEY,
+    platform TEXT NOT NULL,
+    name TEXT NOT NULL,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS jobs (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL,
+    failed_stage TEXT,
+    error_type TEXT,
+    error_message TEXT,
+    retryable INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status);
+
+CREATE TABLE IF NOT EXISTS stage_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL REFERENCES jobs(id),
+    stage TEXT NOT NULL,
+    stage_version INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    cached INTEGER NOT NULL DEFAULT 0,
+    config_hash TEXT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    duration_ms INTEGER,
+    error_type TEXT,
+    error_message TEXT
+);
+CREATE INDEX IF NOT EXISTS stage_runs_job ON stage_runs(job_id, stage);
+
+CREATE TABLE IF NOT EXISTS clips (
+    job_id TEXT NOT NULL REFERENCES jobs(id),
+    clip_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    start REAL NOT NULL,
+    "end" REAL NOT NULL,
+    score INTEGER NOT NULL,
+    hook TEXT NOT NULL DEFAULT '',
+    video_key TEXT,
+    thumb_key TEXT,
+    meta_key TEXT,
+    meta_override TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (job_id, clip_id)
+);
+
+CREATE TABLE IF NOT EXISTS review_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    clip_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS publications (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    clip_id TEXT NOT NULL,
+    campaign_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    external_id TEXT,
+    url TEXT,
+    scheduled_at TEXT,
+    published_at TEXT,
+    status TEXT NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (job_id, clip_id, account_id)
+);
+CREATE INDEX IF NOT EXISTS publications_account ON publications(account_id, scheduled_at);
+
+CREATE TABLE IF NOT EXISTS stats_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    publication_id TEXT NOT NULL REFERENCES publications(id),
+    views INTEGER NOT NULL,
+    likes INTEGER NOT NULL,
+    comments INTEGER NOT NULL,
+    collected_at TEXT NOT NULL,
+    source TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS stats_pub ON stats_snapshots(publication_id, collected_at);
+
+-- append-only: история статистики не перезаписывается
+CREATE TRIGGER IF NOT EXISTS stats_no_update BEFORE UPDATE ON stats_snapshots
+BEGIN SELECT RAISE(ABORT, 'stats_snapshots is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS stats_no_delete BEFORE DELETE ON stats_snapshots
+BEGIN SELECT RAISE(ABORT, 'stats_snapshots is append-only'); END;
+"""
+
+
+def _ts(dt: datetime | None) -> str | None:
+    return dt.isoformat() if dt else None
+
+
+def _dt(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value) if value else None
+
+
+class NotFound(Exception):
+    pass
+
+
+class Database:
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.init()
+
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        conn = sqlite3.connect(self.path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
+    def init(self) -> None:
+        with self.connect() as c:
+            c.execute("PRAGMA journal_mode = WAL")
+            c.executescript(SCHEMA)
+            row = c.execute("SELECT version FROM schema_version").fetchone()
+            if row is None:
+                c.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+
+    # ------------------------------------------------------------ config sync
+
+    def sync_campaigns(self, campaigns: dict[str, Campaign]) -> None:
+        now = _ts(utcnow())
+        with self.connect() as c:
+            for camp in campaigns.values():
+                c.execute(
+                    "INSERT INTO campaigns(id, name, data, updated_at) VALUES (?,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name, data=excluded.data, "
+                    "updated_at=excluded.updated_at",
+                    (camp.id, camp.name, camp.model_dump_json(), now),
+                )
+
+    def sync_accounts(self, accounts: dict[str, Account]) -> None:
+        now = _ts(utcnow())
+        with self.connect() as c:
+            for acc in accounts.values():
+                c.execute(
+                    "INSERT INTO accounts(id, platform, name, data, updated_at) VALUES (?,?,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET platform=excluded.platform, name=excluded.name, "
+                    "data=excluded.data, updated_at=excluded.updated_at",
+                    (acc.id, acc.platform.value, acc.name, acc.model_dump_json(), now),
+                )
+
+    # ------------------------------------------------------------ jobs
+
+    def create_job(self, job: Job) -> Job:
+        with self.connect() as c:
+            c.execute(
+                "INSERT INTO jobs(id, campaign_id, source, status, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (job.id, job.campaign_id, job.source, job.status.value,
+                 _ts(job.created_at), _ts(job.updated_at)),
+            )  # fmt: skip
+        return job
+
+    def _job(self, row: sqlite3.Row) -> Job:
+        return Job(
+            id=row["id"],
+            campaign_id=row["campaign_id"],
+            source=row["source"],
+            status=JobStatus(row["status"]),
+            failed_stage=StageName(row["failed_stage"]) if row["failed_stage"] else None,
+            error_type=row["error_type"],
+            error_message=row["error_message"],
+            retryable=None if row["retryable"] is None else bool(row["retryable"]),
+            created_at=_dt(row["created_at"]),
+            updated_at=_dt(row["updated_at"]),
+        )
+
+    def get_job(self, job_id: str) -> Job:
+        with self.connect() as c:
+            row = c.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise NotFound(f"job {job_id} not found")
+        return self._job(row)
+
+    def list_jobs(self, statuses: list[JobStatus] | None = None, limit: int = 50) -> list[Job]:
+        q, args = "SELECT * FROM jobs", []
+        if statuses:
+            q += f" WHERE status IN ({','.join('?' * len(statuses))})"
+            args = [s.value for s in statuses]
+        q += " ORDER BY created_at DESC LIMIT ?"
+        with self.connect() as c:
+            rows = c.execute(q, (*args, limit)).fetchall()
+        return [self._job(r) for r in rows]
+
+    def set_job_status(self, job_id: str, status: JobStatus) -> None:
+        with self.connect() as c:
+            c.execute(
+                "UPDATE jobs SET status=?, failed_stage=NULL, error_type=NULL, error_message=NULL, "
+                "retryable=NULL, updated_at=? WHERE id=?",
+                (status.value, _ts(utcnow()), job_id),
+            )
+
+    def set_job_failed(
+        self, job_id: str, stage: StageName | None, error_type: str, message: str, retryable: bool
+    ) -> None:
+        with self.connect() as c:
+            c.execute(
+                "UPDATE jobs SET status=?, failed_stage=?, error_type=?, error_message=?, "
+                "retryable=?, updated_at=? WHERE id=?",
+                (JobStatus.failed.value, stage.value if stage else None, error_type,
+                 message[:4000], int(retryable), _ts(utcnow()), job_id),
+            )  # fmt: skip
+
+    # ------------------------------------------------------------ stage runs
+
+    def start_stage_run(
+        self, job_id: str, stage: StageName, stage_version: int, config_hash: str
+    ) -> int:
+        with self.connect() as c:
+            cur = c.execute(
+                "INSERT INTO stage_runs(job_id, stage, stage_version, status, config_hash, "
+                "started_at) VALUES (?,?,?,?,?,?)",
+                (job_id, stage.value, stage_version, "running", config_hash, _ts(utcnow())),
+            )
+            return int(cur.lastrowid)
+
+    def finish_stage_run(
+        self,
+        run_id: int,
+        status: str,
+        *,
+        cached: bool = False,
+        duration_ms: int | None = None,
+        error_type: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        with self.connect() as c:
+            c.execute(
+                "UPDATE stage_runs SET status=?, cached=?, completed_at=?, duration_ms=?, "
+                "error_type=?, error_message=? WHERE id=?",
+                (status, int(cached), _ts(utcnow()), duration_ms, error_type,
+                 (error_message or "")[:4000] or None, run_id),
+            )  # fmt: skip
+
+    def stage_runs(self, job_id: str) -> list[dict[str, Any]]:
+        with self.connect() as c:
+            rows = c.execute(
+                "SELECT * FROM stage_runs WHERE job_id=? ORDER BY id", (job_id,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------ clips
+
+    def upsert_clip(self, clip: ClipRecord) -> None:
+        now = _ts(utcnow())
+        override = (
+            json.dumps([m.model_dump(mode="json") for m in clip.meta_override], ensure_ascii=False)
+            if clip.meta_override
+            else None
+        )
+        with self.connect() as c:
+            c.execute(
+                'INSERT INTO clips(job_id, clip_id, status, start, "end", score, hook, video_key, '
+                "thumb_key, meta_key, meta_override, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                'ON CONFLICT(job_id, clip_id) DO UPDATE SET start=excluded.start, "end"=excluded."end", '
+                "score=excluded.score, hook=excluded.hook, video_key=excluded.video_key, "
+                "thumb_key=excluded.thumb_key, meta_key=excluded.meta_key, updated_at=excluded.updated_at",
+                (clip.job_id, clip.clip_id, clip.status.value, clip.start, clip.end, clip.score,
+                 clip.hook, clip.video_key, clip.thumb_key, clip.meta_key, override, now, now),
+            )  # fmt: skip
+
+    def _clip(self, r: sqlite3.Row) -> ClipRecord:
+        override = None
+        if r["meta_override"]:
+            override = [PlatformClipMeta.model_validate(m) for m in json.loads(r["meta_override"])]
+        return ClipRecord(
+            job_id=r["job_id"], clip_id=r["clip_id"], status=ClipStatus(r["status"]),
+            start=r["start"], end=r["end"], score=r["score"], hook=r["hook"],
+            video_key=r["video_key"], thumb_key=r["thumb_key"], meta_key=r["meta_key"],
+            meta_override=override,
+        )  # fmt: skip
+
+    def list_clips(self, job_id: str) -> list[ClipRecord]:
+        with self.connect() as c:
+            rows = c.execute(
+                "SELECT * FROM clips WHERE job_id=? ORDER BY clip_id", (job_id,)
+            ).fetchall()
+        return [self._clip(r) for r in rows]
+
+    def get_clip(self, job_id: str, clip_id: str) -> ClipRecord:
+        with self.connect() as c:
+            r = c.execute(
+                "SELECT * FROM clips WHERE job_id=? AND clip_id=?", (job_id, clip_id)
+            ).fetchone()
+        if r is None:
+            raise NotFound(f"clip {job_id}/{clip_id} not found")
+        return self._clip(r)
+
+    def delete_clips_not_in(self, job_id: str, clip_ids: list[str]) -> None:
+        with self.connect() as c:
+            if clip_ids:
+                marks = ",".join("?" * len(clip_ids))
+                c.execute(
+                    f"DELETE FROM clips WHERE job_id=? AND clip_id NOT IN ({marks})",  # noqa: S608
+                    (job_id, *clip_ids),
+                )
+            else:
+                c.execute("DELETE FROM clips WHERE job_id=?", (job_id,))
+
+    def set_clip_status(self, job_id: str, clip_id: str, status: ClipStatus) -> None:
+        with self.connect() as c:
+            c.execute(
+                "UPDATE clips SET status=?, updated_at=? WHERE job_id=? AND clip_id=?",
+                (status.value, _ts(utcnow()), job_id, clip_id),
+            )
+
+    def set_clip_meta_override(
+        self, job_id: str, clip_id: str, metas: list[PlatformClipMeta]
+    ) -> None:
+        payload = json.dumps([m.model_dump(mode="json") for m in metas], ensure_ascii=False)
+        with self.connect() as c:
+            c.execute(
+                "UPDATE clips SET meta_override=?, updated_at=? WHERE job_id=? AND clip_id=?",
+                (payload, _ts(utcnow()), job_id, clip_id),
+            )
+
+    # ------------------------------------------------------------ review
+
+    def add_review_action(self, action: ReviewAction) -> None:
+        with self.connect() as c:
+            c.execute(
+                "INSERT INTO review_actions(job_id, clip_id, action, payload, actor, created_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (action.job_id, action.clip_id, action.action.value,
+                 json.dumps(action.payload, ensure_ascii=False), action.actor,
+                 _ts(action.created_at)),
+            )  # fmt: skip
+
+    def review_actions(self, job_id: str) -> list[dict[str, Any]]:
+        with self.connect() as c:
+            rows = c.execute(
+                "SELECT * FROM review_actions WHERE job_id=? ORDER BY id", (job_id,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------ publications
+
+    def _pub(self, r: sqlite3.Row) -> Publication:
+        return Publication(
+            id=r["id"], job_id=r["job_id"], clip_id=r["clip_id"], campaign_id=r["campaign_id"],
+            platform=r["platform"], account_id=r["account_id"], external_id=r["external_id"],
+            url=r["url"], scheduled_at=_dt(r["scheduled_at"]), published_at=_dt(r["published_at"]),
+            status=PublicationStatus(r["status"]), error=r["error"],
+        )  # fmt: skip
+
+    def save_publication(self, pub: Publication) -> None:
+        now = _ts(utcnow())
+        with self.connect() as c:
+            c.execute(
+                "INSERT INTO publications(id, job_id, clip_id, campaign_id, platform, account_id, "
+                "external_id, url, scheduled_at, published_at, status, error, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                "external_id=excluded.external_id, url=excluded.url, scheduled_at=excluded.scheduled_at, "
+                "published_at=excluded.published_at, status=excluded.status, error=excluded.error, "
+                "updated_at=excluded.updated_at",
+                (pub.id, pub.job_id, pub.clip_id, pub.campaign_id, pub.platform.value,
+                 pub.account_id, pub.external_id, pub.url, _ts(pub.scheduled_at),
+                 _ts(pub.published_at), pub.status.value, pub.error, now, now),
+            )  # fmt: skip
+
+    def get_publication(self, pub_id: str) -> Publication:
+        with self.connect() as c:
+            r = c.execute("SELECT * FROM publications WHERE id=?", (pub_id,)).fetchone()
+        if r is None:
+            raise NotFound(f"publication {pub_id} not found")
+        return self._pub(r)
+
+    def list_publications(
+        self,
+        *,
+        account_id: str | None = None,
+        job_id: str | None = None,
+        campaign_id: str | None = None,
+        statuses: list[PublicationStatus] | None = None,
+    ) -> list[Publication]:
+        q, args = "SELECT * FROM publications WHERE 1=1", []
+        for col, val in (
+            ("account_id", account_id),
+            ("job_id", job_id),
+            ("campaign_id", campaign_id),
+        ):
+            if val is not None:
+                q += f" AND {col}=?"
+                args.append(val)
+        if statuses:
+            q += f" AND status IN ({','.join('?' * len(statuses))})"
+            args.extend(s.value for s in statuses)
+        q += " ORDER BY scheduled_at, id"
+        with self.connect() as c:
+            rows = c.execute(q, args).fetchall()
+        return [self._pub(r) for r in rows]
+
+    # ------------------------------------------------------------ stats
+
+    def add_stats(self, snap: StatsSnapshot) -> None:
+        with self.connect() as c:
+            c.execute(
+                "INSERT INTO stats_snapshots(publication_id, views, likes, comments, collected_at, "
+                "source) VALUES (?,?,?,?,?,?)",
+                (snap.publication_id, snap.views, snap.likes, snap.comments,
+                 _ts(snap.collected_at), snap.source),
+            )  # fmt: skip
+
+    def stats_history(self, publication_id: str) -> list[StatsSnapshot]:
+        with self.connect() as c:
+            rows = c.execute(
+                "SELECT * FROM stats_snapshots WHERE publication_id=? ORDER BY collected_at, id",
+                (publication_id,),
+            ).fetchall()
+        return [
+            StatsSnapshot(
+                publication_id=r["publication_id"],
+                views=r["views"],
+                likes=r["likes"],
+                comments=r["comments"],
+                collected_at=_dt(r["collected_at"]),
+                source=r["source"],
+            )  # fmt: skip
+            for r in rows
+        ]
+
+    def latest_stats(self) -> dict[str, StatsSnapshot]:
+        with self.connect() as c:
+            rows = c.execute(
+                "SELECT s.* FROM stats_snapshots s JOIN ("
+                "  SELECT publication_id, MAX(id) AS mid FROM stats_snapshots GROUP BY publication_id"
+                ") m ON s.id = m.mid"
+            ).fetchall()
+        return {
+            r["publication_id"]: StatsSnapshot(
+                publication_id=r["publication_id"],
+                views=r["views"],
+                likes=r["likes"],
+                comments=r["comments"],
+                collected_at=_dt(r["collected_at"]),
+                source=r["source"],
+            )  # fmt: skip
+            for r in rows
+        }

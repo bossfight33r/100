@@ -1,0 +1,15 @@
+# Пример кампании. Все поля описаны в docs/campaigns.md.
+id: example
+name: Example podcast clips
+rate_per_1k_views: 1.5        # $ за 1000 просмотров
+platforms: [youtube, tiktok]
+clip_min_sec: 20
+clip_max_sec: 60
+clip_count: 3
+language: ru                  # null — автоопределение Whisper
+must_include_tags: ["#shorts"]
+mentions: ["@example_brand"]
+forbidden: ["казино", "ставки"]
+notes: |
+  Фокус на практических советах и сильных мнениях гостя.
+accounts: [yt_main, tt_main]
