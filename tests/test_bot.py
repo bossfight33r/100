@@ -97,7 +97,7 @@ def test_parse_callback():
     assert parse_callback("camp:example").value == "example"
     assert parse_callback("retry:j1").kind == "retry"
     assert parse_callback("rv:zz:j:c") is None and parse_callback("evil") is None
-    assert len("rv:a:20261005-221412-57009e:c01".encode()) <= 64
+    assert len(b"rv:a:20261005-221412-57009e:c01") <= 64
 
 
 def test_dispatcher_requires_admins(tmp_path):
@@ -152,10 +152,14 @@ async def test_full_flow_progress_cards_review_and_retry(tmp_path, monkeypatch):
 
     [job] = app.db.list_jobs()
     assert app.db.get_job(job.id).status == JobStatus.failed
-    texts = [m.text for m in session.of(SendMessage)] + [m.text for m in session.of(EditMessageText)]
+    texts = [m.text for m in session.of(SendMessage)] + [
+        m.text for m in session.of(EditMessageText)
+    ]
     assert any("Упал этап <b>render</b>" in t for t in texts)
     assert not any("sk-ant-SECRET123" in t for t in texts)  # секреты не уходят в Telegram
-    progress_msgs = [m for m in session.of(SendMessage) if "Job <code>" in m.text and "Загрузка" in m.text]
+    progress_msgs = [
+        m for m in session.of(SendMessage) if "Job <code>" in m.text and "Загрузка" in m.text
+    ]
     assert len(progress_msgs) == 1  # прогресс — одно сообщение, дальше только edit
     retry_msg = session.of(SendMessage)[-1]
     assert retry_msg.reply_markup.inline_keyboard[0][0].callback_data == f"retry:{job.id}"

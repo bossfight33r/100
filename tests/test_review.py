@@ -52,7 +52,9 @@ def test_rerender_captions_only_reruns_captions_and_render(reviewed):
     meta_before = ClipMeta.model_validate_json(app.storage.local_path(clip.meta_key).read_bytes())
     n = len(app.db.stage_runs(job_id))
     svc.rerender_captions(job_id, clip.clip_id)
-    runs = {r["stage"]: ("cache" if r["cached"] else r["status"]) for r in app.db.stage_runs(job_id)[n:]}
+    runs = {
+        r["stage"]: ("cache" if r["cached"] else r["status"]) for r in app.db.stage_runs(job_id)[n:]
+    }
     assert runs["select"] == runs["reframe"] == "cache"
     assert runs["captions"] == runs["render"] == "completed"
     assert app.db.get_job(job_id).status == JobStatus.awaiting_review
