@@ -1,5 +1,12 @@
 # Changelog
 
+## [Фаза 5] Tracking + earnings
+
+- `track/collector.py`: сбор статистики YouTube (батчи по 50), отметка опубликованных по publishAt, ручной ввод; снимки append-only.
+- `track/earnings.py`: стратегия `FlatRatePerK` (Decimal, округление до центов), точка расширения `strategy_for`.
+- `track/report.py`: отчёты по кампаниям, аккаунтам, топ-клипам; аналитика хуков (lift), корреляция score ↔ просмотры; файл рекомендаций к промпту без изменения production-промпта.
+- CLI `cf track`, `cf report`; бот `/stats`.
+
 ## [Фаза 4] Publishing
 
 - `publish/scheduler.py`: слоты по posting_windows/timezone/daily_limit, шаг 90 мин, DST.

@@ -45,12 +45,15 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 | `cf worker [--burst]` | RQ-воркер; при старте восстанавливает потерянные job из SQLite |
 | `cf auth youtube --account ID` | OAuth своего YouTube-канала, токен в `data/secrets/` (600) |
 | `cf publish JOB_ID [--schedule-only]` | распределить одобренные клипы по слотам и загрузить/экспортировать |
+| `cf track` | собрать статистику YouTube (append-only снимки) |
+| `cf track --manual PUB_ID --views N [--likes --comments]` | ручной ввод для TikTok/Instagram |
+| `cf report [--campaign ID] [--recommendations]` | доход и статистика по кампаниям, аккаунтам, клипам, хукам; файл рекомендаций к промпту |
 | `cf bot` | Telegram-бот ревью (нужны `TELEGRAM_BOT_TOKEN`, `CF_ADMIN_IDS`) |
 | `cf review JOB_ID CLIP_ID approve\|reject` | быстрое ревью из терминала |
 
 Флаги `run`: `--force-stage STAGE` (перезапустить этап и всё после), `--no-cache`.
 
-Глобальные флаги: `--verbose`, `--json`. Полный список команд пополняется по фазам (см. docs/STATUS.md).
+Глобальные флаги: `--verbose`, `--json`. Бот: `/jobs`, `/status`, `/publish`, `/stats` + кнопки ревью.
 
 ## Документация
 

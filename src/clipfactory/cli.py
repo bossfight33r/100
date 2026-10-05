@@ -266,6 +266,57 @@ def publish(
 
 
 @app.command()
+def track(
+    manual: Annotated[
+        str | None, typer.Option("--manual", help="id публикации для ручного ввода")
+    ] = None,
+    views: Annotated[int | None, typer.Option("--views", min=0)] = None,
+    likes: Annotated[int, typer.Option("--likes", min=0)] = 0,
+    comments: Annotated[int, typer.Option("--comments", min=0)] = 0,
+) -> None:
+    """Собрать статистику YouTube (или --manual PUB_ID --views N для других платформ)."""
+    from clipfactory.db import NotFound
+    from clipfactory.track.collector import TrackError, add_manual, collect_youtube
+
+    app_ = _app()
+    if manual:
+        if views is None:
+            _fail("--views is required with --manual")
+        try:
+            snap = add_manual(app_, manual, views=views, likes=likes, comments=comments)
+        except (NotFound, TrackError) as e:
+            _fail(str(e))
+        _out(snap.model_dump(mode="json"), f"Записано: {manual} — {views} просмотров")
+        return
+    snaps = collect_youtube(app_)
+    _out([s.model_dump(mode="json") for s in snaps], f"Собрано снимков: {len(snaps)}")
+
+
+@app.command()
+def report(
+    campaign: Annotated[str | None, typer.Option("--campaign", "-c")] = None,
+    top: Annotated[int, typer.Option("--top", min=1)] = 10,
+    recommendations: Annotated[
+        bool, typer.Option("--recommendations", help="Записать файл рекомендаций к промпту")
+    ] = False,
+) -> None:
+    """Доход и статистика по кампаниям, аккаунтам, топ-клипам и хукам."""
+    from clipfactory.track.report import build_report, render_text, write_prompt_recommendations
+
+    app_ = _app()
+    r = build_report(app_, campaign_id=campaign, top=top)
+    path = write_prompt_recommendations(app_, r) if recommendations else None
+    if _state["json"]:
+        data = r.model_dump(mode="json")
+        data["recommendations_file"] = str(path) if path else None
+        _out(data)
+        return
+    typer.echo(render_text(r))
+    if path:
+        typer.echo(f"\nРекомендации к промпту: {path}")
+
+
+@app.command()
 def bot() -> None:
     """Telegram-бот (control plane). Нужны TELEGRAM_BOT_TOKEN и CF_ADMIN_IDS."""
     from clipfactory.bot.main import BotConfigError, main

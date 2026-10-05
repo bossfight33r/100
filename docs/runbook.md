@@ -70,6 +70,20 @@ export CF_QUEUE=rq
 
 Официальная публикация через API требует одобренного приложения, поэтому сейчас `cf publish` собирает **export-пакет**: `data/exports/{platform}/{account}/{локальная дата_время}_{publication_id}/` с `video.mp4`, `thumb.jpg`, `caption.txt`, `meta.json`. Залить вручную в указанное время. Статус публикации — `exported`.
 
+## Статистика и доход
+
+```bash
+.venv/bin/cf track                                  # YouTube: views/likes/comments (1 ед. квоты на 50 видео)
+.venv/bin/cf track --manual <PUB_ID> --views 12000  # TikTok/Instagram вручную
+.venv/bin/cf report                                 # кампании, аккаунты, топ-клипы, хуки
+.venv/bin/cf report --recommendations               # + data/reports/prompt_recommendations_*.md
+```
+
+- Снимки `stats_snapshots` только добавляются (UPDATE/DELETE запрещены триггером) — история не теряется.
+- Доход считается при каждом отчёте из последнего снимка: `views / 1000 × rate_per_1k_views` (`track/earnings.py`, стратегия расширяется).
+- Рекомендации к промпту — отдельный файл; `prompts/highlights.md` автоматически не меняется.
+- Периодический сбор на Маке: `crontab -e` → `0 */6 * * * cd ~/clipfactory && .venv/bin/cf track >> data/track.log 2>&1`.
+
 ## Прогон без внешних API
 
 ```bash

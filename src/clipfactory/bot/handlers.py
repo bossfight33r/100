@@ -93,7 +93,8 @@ HELP = (
     "Пришлите видеофайл, ссылку (YouTube или прямой URL) или абсолютный путь к файлу на этой машине.\n"
     "Потом выберите кампанию — я нарежу клипы и пришлю их на ревью.\n\n"
     "/jobs — последние job\n/status JOB_ID — статус и клипы\n"
-    "/publish JOB_ID — запланировать и опубликовать одобренные клипы"
+    "/publish JOB_ID — запланировать и опубликовать одобренные клипы\n"
+    "/stats — просмотры и доход"
 )
 
 
@@ -287,6 +288,12 @@ class BotController:
             lines.append(f"{p.clip_id} → {p.account_id}: {when} [{p.status.value}]")
         return [Reply("\n".join(lines) or "Нечего публиковать.")]
 
+    def stats(self) -> list[Out]:
+        from clipfactory.track.report import build_report, render_text
+
+        text = render_text(build_report(self.app, top=5))
+        return [Reply(f"<pre>{text.replace('&', '&amp;').replace('<', '&lt;')[:3800]}</pre>")]
+
     def after_job(self, job_id: str) -> list[Out]:
         """Что отправить, когда job дошёл до терминального статуса."""
         job = self.app.db.get_job(job_id)
@@ -381,6 +388,10 @@ def build_router(ctl: BotController, rt: Runtime, inbox: Path) -> Router:
             await message.answer("Использование: /status JOB_ID")
             return
         await send_outs(bot, message.chat.id, ctl.status(command.args.strip()), ctl, rt)
+
+    @router.message(Command("stats"))
+    async def _stats(message: Message, bot: Bot) -> None:
+        await send_outs(bot, message.chat.id, await asyncio.to_thread(ctl.stats), ctl, rt)
 
     @router.message(Command("publish"))
     async def _publish(message: Message, bot: Bot, command: CommandObject) -> None:
