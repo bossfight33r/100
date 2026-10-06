@@ -32,7 +32,8 @@ export CF_QUEUE=rq
 - Воркер — `rq.SimpleWorker` (без fork: на macOS fork + ObjC/Metal небезопасен).
 - При старте воркер чистит мёртвые started-задачи RQ и ставит заново все job из SQLite в статусах `queued`…`rendering`, у которых нет живой задачи. Потеря Redis не теряет состояние: оно в SQLite + манифестах.
 - Retry: `cf retry JOB_ID` — валидные этапы берутся из кеша. Повторять имеет смысл при `retryable=true` (сеть, таймаут, rate limit); при `false` сначала исправить причину.
-- Отмена: `Queue.cancel` снимает только ещё не начатую задачу.
+- Отмена: `cf cancel JOB_ID` (или `/cancel` в боте). Задача в очереди снимается; идущая job получает флаг в SQLite, воркер прерывает ffmpeg в течение ~1 с и помечает job `failed` с `error_type=cancelled` (retryable). Продолжить — `cf retry JOB_ID`, готовые этапы и клипы возьмутся из кеша. Вызов Whisper/LLM не прерывается посередине — отмена сработает сразу после него.
+- Повторный `cf retry`/`enqueue` для job, которая уже в очереди или выполняется, отклоняется (`JobBusy`) — дублей задач нет.
 
 ## Telegram-бот
 
@@ -64,6 +65,8 @@ export CF_QUEUE=rq
 | `YouTube quota exceeded` | дневная квота API (по умолчанию 10 000 единиц, загрузка стоит ~1600 → ~6 видео/сутки). Публикация остаётся `scheduled`; повторить `cf publish JOB_ID` завтра или запросить квоту |
 | `auth/permission error 401/403` | токен отозван или нет прав — `cf auth youtube --account ID` заново |
 | `no token for ...` | не выполнен `cf auth youtube` |
+| `upload was interrupted` | процесс упал во время загрузки. Автоповтора нет (мог бы создать дубль). Проверить канал в YouTube Studio, удалить дубль при наличии, затем `cf publish JOB_ID --retry-failed` |
+| слот публикации в прошлом | при повторе после квоты/сети слот автоматически переносится на ближайший допустимый (окна, лимит, интервал) — видео не уйдёт публичным сразу |
 | `clip is rejected` | отклонённые клипы не публикуются никогда (проверка и при планировании, и перед загрузкой) |
 
 ## TikTok / Instagram
@@ -82,7 +85,7 @@ export CF_QUEUE=rq
 - Снимки `stats_snapshots` только добавляются (UPDATE/DELETE запрещены триггером) — история не теряется.
 - Доход считается при каждом отчёте из последнего снимка: `views / 1000 × rate_per_1k_views` (`track/earnings.py`, стратегия расширяется).
 - Рекомендации к промпту — отдельный файл; `prompts/highlights.md` автоматически не меняется.
-- Периодический сбор на Маке: `crontab -e` → `0 */6 * * * cd ~/clipfactory && .venv/bin/cf track >> data/track.log 2>&1`.
+- Периодический сбор: `.venv/bin/cf track --every 6h` (минимум 5 мин) или cron: `0 */6 * * * cd ~/clipfactory && .venv/bin/cf track >> data/track.log 2>&1`.
 
 ## Прогон без внешних API
 

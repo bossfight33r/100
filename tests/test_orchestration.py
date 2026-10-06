@@ -235,3 +235,57 @@ def test_cli_unknown_campaign_is_clean_error(tmp_path, monkeypatch, short_video)
     res = CliRunner().invoke(cli, ["run", str(short_video), "--campaign", "nope"])
     assert res.exit_code == 1 and "unknown campaign" in res.output
     assert "Traceback" not in res.output
+
+
+def test_cancel_running_job_then_retry_resumes(env):
+    import threading
+    import time
+
+    app, job_id, tr, _ = env
+    errors = []
+
+    def runner():
+        try:
+            app.run_job(job_id)
+        except JobFailed as e:
+            errors.append(e)
+
+    th = threading.Thread(target=runner)
+    th.start()
+    deadline = time.monotonic() + 60
+    while app.db.get_job(job_id).status != JobStatus.reframing and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert app.cancel_job(job_id) == "requested"
+    th.join(timeout=120)
+    job = app.db.get_job(job_id)
+    assert job.status == JobStatus.failed and job.error_type == "cancelled" and job.retryable
+    assert errors and job.failed_stage in (StageName.reframe, StageName.captions, StageName.render)
+
+    app.retry_job(job_id)  # флаг отмены сбрасывается при постановке
+    runs = runs_by_stage(app, job_id, len(app.db.stage_runs(job_id)) - 6)
+    assert runs["transcribe"] == "cache" and tr.calls == 1
+    assert app.db.get_job(job_id).status == JobStatus.awaiting_review
+    with pytest.raises(ValueError):
+        app.cancel_job(job_id)  # уже не выполняется
+
+
+def test_db_migrates_v1_schema(tmp_path):
+    import sqlite3
+
+    from clipfactory.db import SCHEMA, SCHEMA_VERSION, Database
+
+    path = tmp_path / "old.sqlite3"
+    with sqlite3.connect(path) as c:
+        c.executescript(SCHEMA)
+        c.execute("INSERT INTO schema_version(version) VALUES (1)")
+        c.execute(
+            "INSERT INTO jobs(id, campaign_id, source, status, created_at, updated_at) "
+            "VALUES ('j', 'c', 's', 'queued', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+        )
+    db = Database(path)
+    assert db.cancel_requested("j") is False
+    db.request_cancel("j")
+    assert db.cancel_requested("j") is True
+    with db.connect() as c:
+        assert c.execute("SELECT version FROM schema_version").fetchone()[0] == SCHEMA_VERSION
+    Database(path)  # повторная инициализация идемпотентна

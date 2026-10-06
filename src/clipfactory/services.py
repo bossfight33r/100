@@ -186,11 +186,25 @@ class App:
 
         if self.queue.status(run_job_task_id(job_id)) in (TaskStatus.queued, TaskStatus.running):
             raise JobBusy(f"job {job_id} is already queued or running")
+        self.db.clear_cancel(job_id)
         self.db.set_job_status(job_id, JobStatus.queued)
         task = make_run_task(
             job_id, force_stage=force_stage.value if force_stage else None, no_cache=no_cache
         )
         return self.queue.enqueue(task)
+
+    def cancel_job(self, job_id: str) -> str:
+        """Отменить job: снять из очереди или попросить работающий pipeline остановиться."""
+        from clipfactory.worker import ACTIVE_STATUSES, run_job_task_id
+
+        job = self.db.get_job(job_id)
+        if job.status == JobStatus.queued and self.queue.cancel(run_job_task_id(job_id)):
+            self.db.set_job_failed(job_id, None, "cancelled", "cancelled before start", True)
+            return "dequeued"
+        if job.status in (JobStatus.queued, *ACTIVE_STATUSES):
+            self.db.request_cancel(job_id)
+            return "requested"
+        raise ValueError(f"job {job_id} is {job.status.value}; nothing to cancel")
 
     def retry_job(self, job_id: str, *, force_stage: StageName | None = None) -> str:
         """Повторить job: этапы с валидным манифестом не выполняются заново."""

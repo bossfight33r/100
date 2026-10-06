@@ -223,6 +223,8 @@ class RenderStage:
         outputs: list[str] = []
         reused = 0
         for cand in highlights.candidates:
+            if ctx.cancel.is_set():
+                raise ffmpeg.FFmpegCancelled("render cancelled")
             video_key = ctx.clip_key(cand.id, "final.mp4")
             thumb_key = ctx.clip_key(cand.id, "thumb.jpg")
             fp = clipcache.fingerprint(

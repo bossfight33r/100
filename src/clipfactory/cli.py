@@ -70,6 +70,19 @@ def capabilities() -> None:
         sys.exit(1)
 
 
+def parse_interval(value: str) -> int:
+    """'30m' / '6h' / '1d' / '3600' -> секунды (минимум 5 минут — бережём квоту API)."""
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    value = value.strip().lower()
+    try:
+        seconds = int(value[:-1]) * units[value[-1]] if value[-1] in units else int(value)
+    except (ValueError, IndexError):
+        raise typer.BadParameter(f"bad interval {value!r}; use 30m, 6h, 1d") from None
+    if seconds < 300:
+        raise typer.BadParameter("interval must be at least 5 minutes")
+    return seconds
+
+
 def _app():
     from clipfactory.config import ConfigError, Settings
     from clipfactory.services import App
@@ -191,6 +204,23 @@ def retry(
 
 
 @app.command()
+def cancel(job_id: Annotated[str, typer.Argument(help="id job")]) -> None:
+    """Отменить job: снять из очереди или остановить на ближайшей точке (ffmpeg прерывается)."""
+    from clipfactory.db import NotFound
+
+    app_ = _app()
+    try:
+        result = app_.cancel_job(job_id)
+    except (NotFound, ValueError) as e:
+        _fail(str(e))
+    human = {
+        "dequeued": f"Job {job_id} снят из очереди.",
+        "requested": f"Отмена {job_id} запрошена — остановится в течение пары секунд.",
+    }[result]
+    _out({"job_id": job_id, "result": result}, human)
+
+
+@app.command()
 def worker(
     burst: Annotated[bool, typer.Option("--burst", help="Выйти, когда очередь пуста")] = False,
 ) -> None:
@@ -287,6 +317,9 @@ def track(
     views: Annotated[int | None, typer.Option("--views", min=0)] = None,
     likes: Annotated[int, typer.Option("--likes", min=0)] = 0,
     comments: Annotated[int, typer.Option("--comments", min=0)] = 0,
+    every: Annotated[
+        str | None, typer.Option("--every", help="Собирать периодически: 30m, 6h, 1d")
+    ] = None,
 ) -> None:
     """Собрать статистику YouTube (или --manual PUB_ID --views N для других платформ)."""
     from clipfactory.db import NotFound
@@ -302,8 +335,21 @@ def track(
             _fail(str(e))
         _out(snap.model_dump(mode="json"), f"Записано: {manual} — {views} просмотров")
         return
-    snaps = collect_youtube(app_)
-    _out([s.model_dump(mode="json") for s in snaps], f"Собрано снимков: {len(snaps)}")
+    if every is None:
+        snaps = collect_youtube(app_)
+        _out([s.model_dump(mode="json") for s in snaps], f"Собрано снимков: {len(snaps)}")
+        return
+    import time
+
+    interval = parse_interval(every)
+    typer.echo(f"Сбор статистики каждые {every}; Ctrl+C — стоп")
+    try:
+        while True:
+            snaps = collect_youtube(app_)
+            typer.echo(f"{time.strftime('%Y-%m-%d %H:%M')} снимков: {len(snaps)}")
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        typer.echo("Остановлено.")
 
 
 @app.command()
@@ -346,10 +392,22 @@ def bot() -> None:
 def review(
     job_id: Annotated[str, typer.Argument(help="id job")],
     clip_id: Annotated[str, typer.Argument(help="id клипа, например c01")],
-    action: Annotated[str, typer.Argument(help="approve | reject")],
+    action: Annotated[str, typer.Argument(help="approve | reject | edit | captions | crop")],
+    title: Annotated[str | None, typer.Option("--title")] = None,
+    description: Annotated[str | None, typer.Option("--description")] = None,
+    hashtags: Annotated[str | None, typer.Option("--hashtags", help="через пробел")] = None,
+    platform: Annotated[
+        str | None, typer.Option("--platform", help="youtube|tiktok|instagram")
+    ] = None,
+    center: Annotated[
+        str | None, typer.Option("--center", help="crop: центр кадра 0–100 (%) или auto")
+    ] = None,
+    reason: Annotated[str, typer.Option("--reason", help="reject: причина")] = "",
 ) -> None:
-    """Быстрое ревью из терминала (основной интерфейс ревью — бот)."""
+    """Ревью из терминала: одобрить, отклонить, править метаданные, перерендерить."""
+    from clipfactory.pipeline.orchestrator import JobFailed
     from clipfactory.pipeline.review import ReviewError, ReviewService
+    from clipfactory.schemas import Platform
 
     app_ = _app()
     svc = ReviewService(app_)
@@ -357,11 +415,26 @@ def review(
         if action == "approve":
             svc.approve(job_id, clip_id)
         elif action == "reject":
-            svc.reject(job_id, clip_id)
+            svc.reject(job_id, clip_id, reason=reason)
+        elif action == "edit":
+            if title is None and description is None and hashtags is None:
+                _fail("edit needs --title, --description or --hashtags")
+            svc.edit_metadata(
+                job_id, clip_id, title=title, description=description,
+                hashtags=hashtags.split() if hashtags is not None else None,
+                platform=Platform(platform) if platform else None,
+            )  # fmt: skip
+        elif action == "captions":
+            svc.rerender_captions(job_id, clip_id)
+        elif action == "crop":
+            value = None if center in (None, "auto") else float(center) / 100
+            svc.rerender_crop(job_id, clip_id, center_x=value)
         else:
-            _fail("action must be approve or reject")
-    except ReviewError as e:
+            _fail("action must be approve, reject, edit, captions or crop")
+    except (ReviewError, ValueError) as e:
         _fail(str(e))
+    except JobFailed:
+        pass  # статус и ошибка уже в job — покажем ниже
     _print_summary(app_, job_id)
 
 

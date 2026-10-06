@@ -30,7 +30,12 @@ from clipfactory.schemas import (
     utcnow,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+# Миграции применяются по порядку к базе с меньшей версией (SCHEMA — это версия 1).
+MIGRATIONS: dict[int, list[str]] = {
+    2: ["ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0"],
+}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
@@ -180,7 +185,14 @@ class Database:
             c.executescript(SCHEMA)
             row = c.execute("SELECT version FROM schema_version").fetchone()
             if row is None:
-                c.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+                c.execute("INSERT INTO schema_version(version) VALUES (1)")
+                current = 1
+            else:
+                current = int(row["version"])
+            for version in sorted(v for v in MIGRATIONS if v > current):
+                for stmt in MIGRATIONS[version]:
+                    c.execute(stmt)
+                c.execute("UPDATE schema_version SET version = ?", (version,))
 
     # ------------------------------------------------------------ config sync
 
@@ -267,6 +279,19 @@ class Database:
                 (JobStatus.failed.value, stage.value if stage else None, error_type,
                  message[:4000], int(retryable), _ts(utcnow()), job_id),
             )  # fmt: skip
+
+    def request_cancel(self, job_id: str) -> None:
+        with self.connect() as c:
+            c.execute("UPDATE jobs SET cancel_requested=1 WHERE id=?", (job_id,))
+
+    def clear_cancel(self, job_id: str) -> None:
+        with self.connect() as c:
+            c.execute("UPDATE jobs SET cancel_requested=0 WHERE id=?", (job_id,))
+
+    def cancel_requested(self, job_id: str) -> bool:
+        with self.connect() as c:
+            row = c.execute("SELECT cancel_requested FROM jobs WHERE id=?", (job_id,)).fetchone()
+        return bool(row and row["cancel_requested"])
 
     # ------------------------------------------------------------ stage runs
 

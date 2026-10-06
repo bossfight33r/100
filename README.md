@@ -42,18 +42,19 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 | `cf status JOB_ID` | статус job, упавший этап, этапы (cache/completed), клипы |
 | `cf enqueue SOURCE --campaign ID` | создать job и поставить в очередь (`CF_QUEUE=rq`) |
 | `cf retry JOB_ID [--force-stage STAGE]` | повторить с первого невалидного этапа |
+| `cf cancel JOB_ID` | снять из очереди или остановить идущую job (продолжить потом — `cf retry`) |
 | `cf worker [--burst]` | RQ-воркер; при старте восстанавливает потерянные job из SQLite |
 | `cf auth youtube --account ID` | OAuth своего YouTube-канала, токен в `data/secrets/` (600) |
-| `cf publish JOB_ID [--schedule-only]` | распределить одобренные клипы по слотам и загрузить/экспортировать |
-| `cf track` | собрать статистику YouTube (append-only снимки) |
+| `cf publish JOB_ID [--schedule-only] [--retry-failed]` | распределить одобренные клипы по слотам и загрузить/экспортировать; `--retry-failed` — повторить упавшие |
+| `cf track [--every 6h]` | собрать статистику YouTube (append-only снимки); `--every` — периодически |
 | `cf track --manual PUB_ID --views N [--likes --comments]` | ручной ввод для TikTok/Instagram |
 | `cf report [--campaign ID] [--recommendations]` | доход и статистика по кампаниям, аккаунтам, клипам, хукам; файл рекомендаций к промпту |
 | `cf bot` | Telegram-бот ревью (нужны `TELEGRAM_BOT_TOKEN`, `CF_ADMIN_IDS`) |
-| `cf review JOB_ID CLIP_ID approve\|reject` | быстрое ревью из терминала |
+| `cf review JOB_ID CLIP_ID approve\|reject\|edit\|captions\|crop` | ревью из терминала: `edit --title --description --hashtags [--platform]`, `crop --center 0–100\|auto`, `reject --reason` |
 
 Флаги `run`: `--force-stage STAGE` (перезапустить этап и всё после), `--no-cache`.
 
-Глобальные флаги: `--verbose`, `--json`. Бот: `/jobs`, `/status`, `/publish`, `/stats` + кнопки ревью.
+Глобальные флаги: `--verbose`, `--json`. Бот: `/jobs`, `/status`, `/publish`, `/stats`, `/cancel` + кнопки ревью.
 
 ## Документация
 

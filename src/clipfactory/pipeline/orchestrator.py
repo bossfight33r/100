@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 
 from clipfactory.backends.face.mediapipe import FaceDetectorError
@@ -43,6 +44,36 @@ from clipfactory.storage.base import StorageError
 log = get_logger(__name__)
 
 
+class JobCancelled(Exception):
+    pass
+
+
+class CancelWatcher:
+    """Фоновый опрос флага отмены в DB -> ctx.cancel (ffmpeg и циклы этапов его слушают)."""
+
+    def __init__(self, db: Database, job_id: str, event: threading.Event, interval: float = 1.0):
+        self.db, self.job_id, self.event, self.interval = db, job_id, event, interval
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name=f"cancel-{job_id}", daemon=True)
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self.interval):
+            try:
+                if self.db.cancel_requested(self.job_id):
+                    self.event.set()
+                    return
+            except Exception as e:  # DB временно недоступна — не роняем pipeline
+                log.debug("cancel_watcher.error", error=str(e))
+
+    def __enter__(self) -> CancelWatcher:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+
 class JobFailed(Exception):
     def __init__(self, job_id: str, stage: StageName | None, cause: BaseException) -> None:
         super().__init__(f"job {job_id} failed at {stage}: {cause}")
@@ -64,7 +95,7 @@ def default_stages() -> list[Stage]:
 
 def classify_error(exc: BaseException) -> tuple[str, bool]:
     """(error_type, retryable)."""
-    if isinstance(exc, ffmpeg.FFmpegCancelled):
+    if isinstance(exc, JobCancelled | ffmpeg.FFmpegCancelled):
         return "cancelled", True
     if isinstance(exc, ffmpeg.FFmpegTimeout):
         return "ffmpeg_timeout", True
@@ -168,72 +199,79 @@ class Orchestrator:
         forced = False
         ctx.no_clip_cache = no_cache
         try:
-            for stage in self.stages:
-                current = stage.name
-                forced = forced or no_cache or stage.name == force_stage
-                self.db.set_job_status(job_id, STAGE_STATUS[stage.name])
-                cfg_hash = config_hash(stage.config(ctx))
-                run_id = self.db.start_stage_run(job_id, stage.name, stage.version, cfg_hash)
-                started = time.monotonic()
-                try:
-                    hit, reason = (
-                        (False, "forced")
-                        if forced
-                        else self.cache_valid(stage, ctx, manifests.get(stage.name), cfg_hash)
-                    )
-                    if hit:
-                        manifest = manifests[stage.name]
-                        results.append(
-                            StageResult(
-                                stage=stage.name, outputs=list(manifest.output_hashes), cached=True
-                            )
+            with CancelWatcher(self.db, job_id, ctx.cancel):
+                for stage in self.stages:
+                    if ctx.cancel.is_set():
+                        raise JobCancelled("cancelled by user")
+                    current = stage.name
+                    forced = forced or no_cache or stage.name == force_stage
+                    self.db.set_job_status(job_id, STAGE_STATUS[stage.name])
+                    cfg_hash = config_hash(stage.config(ctx))
+                    run_id = self.db.start_stage_run(job_id, stage.name, stage.version, cfg_hash)
+                    started = time.monotonic()
+                    try:
+                        hit, reason = (
+                            (False, "forced")
+                            if forced
+                            else self.cache_valid(stage, ctx, manifests.get(stage.name), cfg_hash)
                         )
+                        if hit:
+                            manifest = manifests[stage.name]
+                            results.append(
+                                StageResult(
+                                    stage=stage.name,
+                                    outputs=list(manifest.output_hashes),
+                                    cached=True,
+                                )
+                            )
+                            self.db.finish_stage_run(
+                                run_id, StageStatus.skipped.value, cached=True,
+                                duration_ms=int((time.monotonic() - started) * 1000),
+                            )  # fmt: skip
+                            log.info("stage.cached", job_id=job_id, stage=stage.name.value)
+                            continue
+
+                        log.info(
+                            "stage.start", job_id=job_id, stage=stage.name.value, reason=reason
+                        )
+                        started_at = utcnow()
+                        # входы фиксируем до запуска: этап не должен их менять
+                        inputs = self.input_hashes(stage, ctx)
+                        manifests.pop(stage.name, None)
+                        self.save_manifests(ctx, manifests)
+                        result = stage.run(ctx)
+                        stage.validate(ctx, result.outputs)
+                        manifests[stage.name] = StageManifest(
+                            stage=stage.name,
+                            stage_version=stage.version,
+                            input_hashes=inputs,
+                            config_hash=cfg_hash,
+                            output_hashes={k: ctx.storage.checksum(k) for k in result.outputs},
+                            started_at=started_at,
+                            completed_at=utcnow(),
+                            status=StageStatus.completed,
+                        )
+                        self.save_manifests(ctx, manifests)
+                    except Exception as exc:
+                        error_type, _ = classify_error(exc)
                         self.db.finish_stage_run(
-                            run_id, StageStatus.skipped.value, cached=True,
+                            run_id, StageStatus.failed.value, error_type=error_type,
+                            error_message=str(exc),
                             duration_ms=int((time.monotonic() - started) * 1000),
                         )  # fmt: skip
-                        log.info("stage.cached", job_id=job_id, stage=stage.name.value)
-                        continue
-
-                    log.info("stage.start", job_id=job_id, stage=stage.name.value, reason=reason)
-                    started_at = utcnow()
-                    # входы фиксируем до запуска: этап не должен их менять
-                    inputs = self.input_hashes(stage, ctx)
-                    manifests.pop(stage.name, None)
-                    self.save_manifests(ctx, manifests)
-                    result = stage.run(ctx)
-                    stage.validate(ctx, result.outputs)
-                    manifests[stage.name] = StageManifest(
-                        stage=stage.name,
-                        stage_version=stage.version,
-                        input_hashes=inputs,
-                        config_hash=cfg_hash,
-                        output_hashes={k: ctx.storage.checksum(k) for k in result.outputs},
-                        started_at=started_at,
-                        completed_at=utcnow(),
-                        status=StageStatus.completed,
-                    )
-                    self.save_manifests(ctx, manifests)
-                except Exception as exc:
-                    error_type, _ = classify_error(exc)
+                        raise
+                    duration_ms = int((time.monotonic() - started) * 1000)
                     self.db.finish_stage_run(
-                        run_id, StageStatus.failed.value, error_type=error_type,
-                        error_message=str(exc),
-                        duration_ms=int((time.monotonic() - started) * 1000),
-                    )  # fmt: skip
-                    raise
-                duration_ms = int((time.monotonic() - started) * 1000)
-                self.db.finish_stage_run(
-                    run_id, StageStatus.completed.value, duration_ms=duration_ms
-                )
-                results.append(result)
-                log.info(
-                    "stage.done",
-                    job_id=job_id,
-                    stage=stage.name.value,
-                    duration_ms=duration_ms,
-                    **result.info,
-                )
+                        run_id, StageStatus.completed.value, duration_ms=duration_ms
+                    )
+                    results.append(result)
+                    log.info(
+                        "stage.done",
+                        job_id=job_id,
+                        stage=stage.name.value,
+                        duration_ms=duration_ms,
+                        **result.info,
+                    )
             current = None
             self.sync_clips(ctx)
             self.db.set_job_status(job_id, JobStatus.awaiting_review)

@@ -111,3 +111,41 @@ def test_rerender_crop_rerenders_only_that_clip(reviewed, monkeypatch):
     rendered.clear()
     app.run_job(job_id, no_cache=True)
     assert len(rendered) == 2  # --no-cache игнорирует и кеш клипов
+
+
+def test_cli_review_actions(reviewed, monkeypatch):
+    from typer.testing import CliRunner
+
+    from clipfactory.cli import app as cli
+    from clipfactory.services import App
+
+    app, job_id, _ = reviewed
+    monkeypatch.setattr("clipfactory.cli._app", lambda: App(app.settings))
+    runner = CliRunner()
+    clip = app.db.list_clips(job_id)[0].clip_id
+    res = runner.invoke(cli, ["review", job_id, clip, "edit", "--title", "CLI заголовок",
+                              "--hashtags", "#a #b", "--platform", "youtube"])  # fmt: skip
+    assert res.exit_code == 0, res.output
+    yt = next(
+        m for m in ReviewService(app).effective_meta(job_id, clip) if m.platform.value == "youtube"
+    )
+    assert yt.title == "CLI заголовок" and "#a" in yt.hashtags
+    assert runner.invoke(cli, ["review", job_id, clip, "edit"]).exit_code == 1
+    res = runner.invoke(cli, ["review", job_id, clip, "crop", "--center", "10"])
+    assert res.exit_code == 0, res.output
+    assert app.load_overrides(job_id).crop_center_x[clip] == 0.1
+    res = runner.invoke(cli, ["review", job_id, clip, "reject", "--reason", "плохо"])
+    assert res.exit_code == 0 and app.db.get_clip(job_id, clip).status.value == "rejected"
+    assert runner.invoke(cli, ["review", job_id, clip, "dance"]).exit_code == 1
+
+
+def test_parse_interval():
+    import typer
+
+    from clipfactory.cli import parse_interval
+
+    assert parse_interval("30m") == 1800 and parse_interval("6h") == 21600
+    assert parse_interval("1d") == 86400 and parse_interval("600") == 600
+    for bad in ("1m", "abc", "h", ""):
+        with pytest.raises(typer.BadParameter):
+            parse_interval(bad)
