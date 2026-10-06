@@ -16,6 +16,7 @@ from clipfactory.log import get_logger
 from clipfactory.media import ffmpeg
 from clipfactory.media.filters import render_filtergraph
 from clipfactory.media.probe import ProbeError, probe
+from clipfactory.pipeline import clipcache
 from clipfactory.pipeline.context import StageContext, ValidationFailed, config_hash
 from clipfactory.pipeline.select import load_prompt
 from clipfactory.schemas import (
@@ -218,72 +219,101 @@ class RenderStage:
         transcript = ctx.read_model(ctx.key("transcript.json"), Transcript)
         fps = ctx.settings.output_fps
         encoder = ctx.backends.encoder
+        source_sha = ctx.storage.checksum(ctx.key("source.mp4"))
         outputs: list[str] = []
+        reused = 0
         for cand in highlights.candidates:
-            plan = ctx.read_model(ctx.clip_key(cand.id, "reframe.json"), ReframePlan)
-            ass_path = ctx.local_path(ctx.clip_key(cand.id, "captions.ass"))
-            clip_dir = ass_path.parent
-            graph = render_filtergraph(
-                keyframes=plan.keyframes,
-                target_width=plan.target_width,
-                target_height=plan.target_height,
-                fps=fps,
-                ass_file=ass_path.name,  # относительный путь: cwd = каталог клипа
-                fonts_dir=str(ctx.settings.caption_fonts_dir)
-                if ctx.settings.caption_fonts_dir
-                else None,
-                has_audio=has_audio,
-            )
             video_key = ctx.clip_key(cand.id, "final.mp4")
-            tmp_video = clip_dir / ".final.tmp.mp4"
-            log_path = ctx.local_path(ctx.log_key(self.name, f"-{cand.id}"))
-            ffmpeg.ffmpeg(
-                render_args(
-                    source=str(src), cand=cand, plan=plan,
-                    encoder_args=encoder.video_args(fps=fps), fps=fps, has_audio=has_audio,
-                    graph=graph, output=tmp_video.name,
-                ),
-                cwd=clip_dir, log_path=log_path, cancel=ctx.cancel,
-                timeout=ctx.settings.ffmpeg_timeout_sec,
-            )  # fmt: skip
-            validate_video(tmp_video, cand.duration, has_audio, fps)
-
-            # превью — из только что отрендеренного файла: для удалённого хранилища
-            # local_path(video_key) — копия в scratch, сделанная до загрузки нового видео
             thumb_key = ctx.clip_key(cand.id, "thumb.jpg")
-            thumb_path = ctx.local_path(thumb_key)
-            ffmpeg.ffmpeg(
-                ["-ss", f"{min(1.0, cand.duration / 3):.3f}", "-i", str(tmp_video),
-                 "-frames:v", "1", "-q:v", "3", str(thumb_path)],
-                log_path=log_path.with_name(log_path.stem + "-thumb.log"), cancel=ctx.cancel,
+            fp = clipcache.fingerprint(
+                v=self.version, source=source_sha, start=cand.start, end=cand.end,
+                reframe=ctx.storage.checksum(ctx.clip_key(cand.id, "reframe.json")),
+                captions=ctx.storage.checksum(ctx.clip_key(cand.id, "captions.ass")),
+                encoder=encoder.video_args(fps=fps), fps=fps,
+                fonts_dir=str(ctx.settings.caption_fonts_dir or ""),
             )  # fmt: skip
-            ctx.storage.put_file(video_key, tmp_video)
-            tmp_video.unlink(missing_ok=True)
-            ctx.commit(thumb_key, thumb_path)
-
-            clip_text = " ".join(
-                w.text for w in transcript.words if cand.start <= w.start < cand.end
-            )
-            meta_key = ctx.clip_key(cand.id, "meta.json")
-            meta_hash = config_hash(
-                {"candidate": cand.model_dump(mode="json"), "cfg": self.meta_config(ctx)}
-            )
-            metas = self.reusable_meta(ctx, meta_key, meta_hash)
-            if metas is None:
-                metas = generate_meta(ctx.backends.llm, ctx.campaign, cand, clip_text)
-            ctx.write_model(
-                meta_key,
-                ClipMeta(
-                    clip_id=cand.id,
-                    candidate=cand,
-                    platforms=metas,
-                    duration=cand.duration,
-                    meta_hash=meta_hash,
-                ),  # fmt: skip
-            )
+            if clipcache.reusable(ctx, self.name.value, cand.id, fp) is not None:
+                reused += 1
+            else:
+                self._render_clip(ctx, cand, src, has_audio, fps, encoder)
+                clipcache.record(ctx, self.name.value, cand.id, fp, [video_key, thumb_key])
+            meta_key = self._write_meta(ctx, cand, transcript)
             outputs += [video_key, thumb_key, meta_key]
-            log.info("render.clip_done", job_id=ctx.job.id, clip_id=cand.id, duration=cand.duration)
-        return StageResult(stage=self.name, outputs=outputs, info={"encoder": encoder.name})
+        return StageResult(
+            stage=self.name, outputs=outputs, info={"encoder": encoder.name, "clips_reused": reused}
+        )
+
+    def _render_clip(
+        self,
+        ctx: StageContext,
+        cand: ClipCandidate,
+        src: Any,
+        has_audio: bool,
+        fps: int,
+        encoder: Any,
+    ) -> None:
+        plan = ctx.read_model(ctx.clip_key(cand.id, "reframe.json"), ReframePlan)
+        ass_path = ctx.local_path(ctx.clip_key(cand.id, "captions.ass"))
+        clip_dir = ass_path.parent
+        graph = render_filtergraph(
+            keyframes=plan.keyframes,
+            target_width=plan.target_width,
+            target_height=plan.target_height,
+            fps=fps,
+            ass_file=ass_path.name,  # относительный путь: cwd = каталог клипа
+            fonts_dir=str(ctx.settings.caption_fonts_dir)
+            if ctx.settings.caption_fonts_dir
+            else None,
+            has_audio=has_audio,
+        )
+        video_key = ctx.clip_key(cand.id, "final.mp4")
+        tmp_video = clip_dir / ".final.tmp.mp4"
+        log_path = ctx.local_path(ctx.log_key(self.name, f"-{cand.id}"))
+        ffmpeg.ffmpeg(
+            render_args(
+                source=str(src), cand=cand, plan=plan,
+                encoder_args=encoder.video_args(fps=fps), fps=fps, has_audio=has_audio,
+                graph=graph, output=tmp_video.name,
+            ),
+            cwd=clip_dir, log_path=log_path, cancel=ctx.cancel,
+            timeout=ctx.settings.ffmpeg_timeout_sec,
+        )  # fmt: skip
+        validate_video(tmp_video, cand.duration, has_audio, fps)
+
+        # превью — из только что отрендеренного файла: для удалённого хранилища
+        # local_path(video_key) — копия в scratch, сделанная до загрузки нового видео
+        thumb_key = ctx.clip_key(cand.id, "thumb.jpg")
+        thumb_path = ctx.local_path(thumb_key)
+        ffmpeg.ffmpeg(
+            ["-ss", f"{min(1.0, cand.duration / 3):.3f}", "-i", str(tmp_video),
+             "-frames:v", "1", "-q:v", "3", str(thumb_path)],
+            log_path=log_path.with_name(log_path.stem + "-thumb.log"), cancel=ctx.cancel,
+        )  # fmt: skip
+        ctx.storage.put_file(video_key, tmp_video)
+        tmp_video.unlink(missing_ok=True)
+        ctx.commit(thumb_key, thumb_path)
+        log.info("render.clip_done", job_id=ctx.job.id, clip_id=cand.id, duration=cand.duration)
+
+    def _write_meta(self, ctx: StageContext, cand: ClipCandidate, transcript: Any) -> str:
+        clip_text = " ".join(w.text for w in transcript.words if cand.start <= w.start < cand.end)
+        meta_key = ctx.clip_key(cand.id, "meta.json")
+        meta_hash = config_hash(
+            {"candidate": cand.model_dump(mode="json"), "cfg": self.meta_config(ctx)}
+        )
+        metas = self.reusable_meta(ctx, meta_key, meta_hash)
+        if metas is None:
+            metas = generate_meta(ctx.backends.llm, ctx.campaign, cand, clip_text)
+        ctx.write_model(
+            meta_key,
+            ClipMeta(
+                clip_id=cand.id,
+                candidate=cand,
+                platforms=metas,
+                duration=cand.duration,
+                meta_hash=meta_hash,
+            ),  # fmt: skip
+        )
+        return meta_key
 
     def validate(self, ctx: StageContext, outputs: list[str]) -> None:
         src = ctx.local_path(ctx.key("source.mp4"))

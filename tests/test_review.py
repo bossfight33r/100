@@ -86,3 +86,28 @@ def test_review_requires_reviewable_job(reviewed):
     app.db.set_job_status(job_id, JobStatus.awaiting_review)
     with pytest.raises(ReviewError):
         svc.approve(job_id, "nope")
+
+
+def test_rerender_crop_rerenders_only_that_clip(reviewed, monkeypatch):
+    from clipfactory.media import ffmpeg as ff
+
+    app, job_id, svc = reviewed
+    c1, c2 = app.db.list_clips(job_id)
+    before = {c.clip_id: app.storage.checksum(c.video_key) for c in (c1, c2)}
+    rendered = []
+    real = ff.ffmpeg
+
+    def spy(args, **kw):
+        if "-filter_complex" in args:
+            rendered.append(str(kw.get("cwd")))
+        return real(args, **kw)
+
+    monkeypatch.setattr(ff, "ffmpeg", spy)
+    svc.rerender_crop(job_id, c1.clip_id, center_x=0.9)
+    assert len(rendered) == 1 and rendered[0].endswith(c1.clip_id)  # только c01
+    assert app.storage.checksum(c2.video_key) == before[c2.clip_id]
+    assert app.storage.checksum(c1.video_key) != before[c1.clip_id]
+
+    rendered.clear()
+    app.run_job(job_id, no_cache=True)
+    assert len(rendered) == 2  # --no-cache игнорирует и кеш клипов

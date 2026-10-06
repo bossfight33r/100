@@ -14,6 +14,7 @@ from typing import Any
 from clipfactory.backends.face.base import FaceBox
 from clipfactory.media import ffmpeg
 from clipfactory.media.probe import probe
+from clipfactory.pipeline import clipcache
 from clipfactory.pipeline.context import StageContext, ValidationFailed
 from clipfactory.schemas import (
     CropKeyframe,
@@ -179,11 +180,22 @@ class ReframeStage:
         aw = ANALYSIS_WIDTH
         ah = _even(src_h * aw / src_w)
         highlights = ctx.read_model(ctx.key("highlights.json"), Highlights)
-        face = ctx.backends.face
+        source_sha = ctx.storage.checksum(ctx.key("source.mp4"))
         outputs = []
         segments_total = 0
+        reused = 0
         for cand in highlights.candidates:
             override = ctx.overrides.crop_center_x.get(cand.id)
+            key = ctx.clip_key(cand.id, "reframe.json")
+            fp = clipcache.fingerprint(
+                v=self.version, source=source_sha, start=cand.start, end=cand.end,
+                face=ctx.backends.identity("face"), fps=ctx.settings.analysis_fps,
+                params=self.params.__dict__, override=override,
+            )  # fmt: skip
+            if clipcache.reusable(ctx, self.name.value, cand.id, fp) is not None:
+                outputs.append(key)
+                reused += 1
+                continue
             samples: list[Sample] = []
             cuts: list[float] = []
             if override is None:
@@ -199,15 +211,19 @@ class ReframeStage:
                 ):  # fmt: skip
                     if ctx.cancel.is_set():
                         raise ffmpeg.FFmpegCancelled("reframe cancelled")
-                    samples.append(Sample(t=t, faces=face.detect(frame, t)))
+                    samples.append(Sample(t=t, faces=ctx.backends.face.detect(frame, t)))
             plan = plan_reframe(
                 samples, cuts, cand.duration, src_w, src_h, self.params, center_override=override
             )
-            key = ctx.clip_key(cand.id, "reframe.json")
             ctx.write_model(key, plan)
+            clipcache.record(ctx, self.name.value, cand.id, fp, [key])
             outputs.append(key)
             segments_total += len(plan.keyframes)
-        return StageResult(stage=self.name, outputs=outputs, info={"keyframes": segments_total})
+        return StageResult(
+            stage=self.name,
+            outputs=outputs,
+            info={"keyframes": segments_total, "clips_reused": reused},
+        )
 
     def validate(self, ctx: StageContext, outputs: list[str]) -> None:
         highlights = ctx.read_model(ctx.key("highlights.json"), Highlights)

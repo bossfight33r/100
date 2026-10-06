@@ -166,6 +166,7 @@ class Orchestrator:
         current: StageName | None = None
         manifests = self.load_manifests(ctx)
         forced = False
+        ctx.no_clip_cache = no_cache
         try:
             for stage in self.stages:
                 current = stage.name

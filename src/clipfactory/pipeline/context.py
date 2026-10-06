@@ -112,6 +112,7 @@ class StageContext:
     backends: Backends
     overrides: ReviewOverrides = field(default_factory=ReviewOverrides)
     cancel: threading.Event = field(default_factory=threading.Event)
+    no_clip_cache: bool = False  # --no-cache: не брать клипы из кеша этапа
     _scratch: Path | None = None
 
     # ------------------------------------------------------------- keys
