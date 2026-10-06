@@ -97,13 +97,25 @@ def run_worker(app: Any, *, burst: bool = False) -> None:  # pragma: no cover - 
     from rq.registry import StartedJobRegistry
 
     from clipfactory.compute.capabilities import detect
-    from clipfactory.compute.routing import Heartbeat, derive_tags, queues_for_worker, worker_name
+    from clipfactory.compute.routing import (
+        MAX_TAGS,
+        Heartbeat,
+        derive_tags,
+        queues_for_worker,
+        worker_name,
+    )
     from clipfactory.queue.rq import RQQueue
 
     queue = RQQueue(app.settings.redis_url)
     caps = detect()
-    caps.tags = sorted({*caps.tags, *derive_tags(caps, app.settings.worker_tags)})
-    names = queues_for_worker(derive_tags(caps, app.settings.worker_tags), queue.base)
+    # heartbeat и очереди — из одного списка тегов, иначе eligible_workers видит воркер
+    # (например, по os:/arch:), а очередь job никто не слушает
+    tags = sorted({*caps.tags, *derive_tags(caps, app.settings.worker_tags)})
+    if len(tags) > MAX_TAGS:
+        log.warning("worker.tags_truncated", dropped=tags[MAX_TAGS:])
+        tags = tags[:MAX_TAGS]
+    caps.tags = tags
+    names = queues_for_worker(tags, queue.base)
     rq_queues = [queue.queue(n) for n in names]
     for q in rq_queues:
         StartedJobRegistry(queue=q).cleanup()

@@ -19,11 +19,15 @@ class OllamaLLM:
         base_url: str = "http://localhost:11434",
         timeout: float = 600,
         temperature: float = 0.2,
+        num_ctx: int = 16384,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.temperature = temperature
+        # окно Ollama по умолчанию 2–4K токенов: длиннее промпт (транскрипт чанка)
+        # обрезается молча, и модель видит лишь хвост
+        self.num_ctx = num_ctx
 
     def complete(self, *, system: str, prompt: str, max_tokens: int = 4096) -> str:
         body = {
@@ -34,7 +38,11 @@ class OllamaLLM:
             ],
             "stream": False,
             "format": "json",  # наши промпты всегда ждут JSON-объект
-            "options": {"num_predict": max_tokens, "temperature": self.temperature},
+            "options": {
+                "num_predict": max_tokens,
+                "temperature": self.temperature,
+                "num_ctx": self.num_ctx,
+            },
         }
         req = urllib.request.Request(  # noqa: S310 — URL из конфига
             f"{self.base_url}/api/chat",

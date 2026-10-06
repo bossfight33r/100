@@ -557,7 +557,8 @@ class Database:
         if statuses:
             q += f" AND status IN ({','.join('?' * len(statuses))})"
             args.extend(s.value for s in statuses)
-        q += " ORDER BY scheduled_at, id"
+        # NULL первыми и в SQLite, и в PostgreSQL (там по умолчанию NULLS LAST)
+        q += " ORDER BY (scheduled_at IS NOT NULL), scheduled_at, id"
         with self.connect() as c:
             rows = c.execute(q, args).fetchall()
         return [self._pub(r) for r in rows]

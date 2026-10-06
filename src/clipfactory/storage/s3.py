@@ -129,9 +129,14 @@ class S3Storage:
         meta = {k.lower(): v for k, v in (self._head(key).get("Metadata") or {}).items()}
         if SHA_META in meta:
             return meta[SHA_META]
-        # объект загружен не нами — считаем потоково
+        # объект загружен не нами — считаем потоково (open_read держит весь объект в памяти)
+        try:
+            obj = self.client.get_object(Bucket=self.bucket, Key=self._key(key))
+        except Exception as e:
+            if self._missing(e):
+                raise ObjectNotFound(key) from e
+            raise StorageError(f"s3 get {key}: {e}") from e
         h = hashlib.sha256()
-        with self.open_read(key) as f:
-            while chunk := f.read(_CHUNK):
-                h.update(chunk)
+        for chunk in obj["Body"].iter_chunks(_CHUNK):
+            h.update(chunk)
         return h.hexdigest()

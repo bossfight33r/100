@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     llm_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5:7b-instruct"
+    ollama_num_ctx: int = 16384  # окно контекста; дефолт Ollama (2–4K) молча режет транскрипт
     llm_max_tokens: int = 16000
     face_detector: Literal["mediapipe", "fake"] = "mediapipe"
     face_model_path: Path = Path("data/models/blaze_face_short_range.tflite")

@@ -60,7 +60,9 @@ def build_llm(settings: Settings) -> LLMProvider:
     if settings.llm_provider == "ollama":
         from clipfactory.backends.llm.ollama import OllamaLLM
 
-        return OllamaLLM(settings.ollama_model, base_url=settings.ollama_url)
+        return OllamaLLM(
+            settings.ollama_model, base_url=settings.ollama_url, num_ctx=settings.ollama_num_ctx
+        )
     from clipfactory.backends.llm.anthropic import AnthropicLLM
 
     key = settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else None
@@ -92,8 +94,9 @@ def build_storage(settings: Settings) -> ObjectStorage:
         return S3Storage(
             settings.s3_bucket,
             prefix=settings.s3_prefix,
-            endpoint_url=settings.s3_endpoint_url,
-            region=settings.s3_region,
+            # пустые CF_S3_ENDPOINT_URL= / CF_S3_REGION= из .env — это «не задано», а не ""
+            endpoint_url=settings.s3_endpoint_url or None,
+            region=settings.s3_region or None,
         )
     return LocalStorage(settings.data_dir)
 
