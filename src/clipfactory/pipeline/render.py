@@ -235,7 +235,6 @@ class RenderStage:
                 has_audio=has_audio,
             )
             video_key = ctx.clip_key(cand.id, "final.mp4")
-            video_path = ctx.local_path(video_key)
             tmp_video = clip_dir / ".final.tmp.mp4"
             log_path = ctx.local_path(ctx.log_key(self.name, f"-{cand.id}"))
             ffmpeg.ffmpeg(
@@ -248,16 +247,18 @@ class RenderStage:
                 timeout=ctx.settings.ffmpeg_timeout_sec,
             )  # fmt: skip
             validate_video(tmp_video, cand.duration, has_audio, fps)
-            ctx.storage.put_file(video_key, tmp_video)
-            tmp_video.unlink(missing_ok=True)
 
+            # превью — из только что отрендеренного файла: для удалённого хранилища
+            # local_path(video_key) — копия в scratch, сделанная до загрузки нового видео
             thumb_key = ctx.clip_key(cand.id, "thumb.jpg")
             thumb_path = ctx.local_path(thumb_key)
             ffmpeg.ffmpeg(
-                ["-ss", f"{min(1.0, cand.duration / 3):.3f}", "-i", str(video_path),
+                ["-ss", f"{min(1.0, cand.duration / 3):.3f}", "-i", str(tmp_video),
                  "-frames:v", "1", "-q:v", "3", str(thumb_path)],
                 log_path=log_path.with_name(log_path.stem + "-thumb.log"), cancel=ctx.cancel,
             )  # fmt: skip
+            ctx.storage.put_file(video_key, tmp_video)
+            tmp_video.unlink(missing_ok=True)
             ctx.commit(thumb_key, thumb_path)
 
             clip_text = " ".join(

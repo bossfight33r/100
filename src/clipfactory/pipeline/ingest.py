@@ -162,7 +162,9 @@ class IngestStage:
             stage=self.name,
             outputs=[out_key],
             info={
-                "source_checksum": sha256_file(fetched),
+                # без перекодирования source.mp4 — копия источника: его хеш LocalStorage
+                # кеширует и переиспользует для манифеста, повторного чтения файла нет
+                "source_checksum": None if remuxed else ctx.storage.checksum(out_key),
                 "remuxed": remuxed,
                 "duration": info.duration,
                 "width": info.display_size[0],

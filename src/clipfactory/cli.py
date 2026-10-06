@@ -305,7 +305,7 @@ def report(
 
     app_ = _app()
     r = build_report(app_, campaign_id=campaign, top=top)
-    path = write_prompt_recommendations(app_, r) if recommendations else None
+    path = write_prompt_recommendations(app_, r, campaign_id=campaign) if recommendations else None
     if _state["json"]:
         data = r.model_dump(mode="json")
         data["recommendations_file"] = str(path) if path else None

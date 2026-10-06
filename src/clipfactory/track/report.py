@@ -211,14 +211,24 @@ def render_text(r: Report) -> str:
     return "\n".join(lines)
 
 
-def write_prompt_recommendations(app: Any, r: Report, out_dir: Path | None = None) -> Path:
+def write_prompt_recommendations(
+    app: Any, r: Report, out_dir: Path | None = None, campaign_id: str | None = None
+) -> Path:
     """Файл с наблюдениями и примерами для ручной правки prompts/highlights.md."""
     out_dir = out_dir or app.settings.data_dir / "reports"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"prompt_recommendations_{r.generated_at:%Y%m%d_%H%M}.md"
-    with_hooks = [c for c in r.top_clips if c.hook]
+    # только публикации со снятой статистикой: 0 просмотров у запланированных/упавших
+    # публикаций — отсутствие данных, а не слабый хук
+    tracked = app.db.latest_stats()
+    with_hooks = [c for c in r.top_clips if c.hook and c.publication_id in tracked]
     all_clips = sorted(
-        [c for c in build_report(app, top=10_000).top_clips if c.hook], key=lambda c: c.views
+        (
+            c
+            for c in build_report(app, campaign_id=campaign_id, top=10_000).top_clips
+            if c.hook and c.publication_id in tracked
+        ),
+        key=lambda c: c.views,
     )
     worst = all_clips[:5]
     lines = [

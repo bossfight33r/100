@@ -153,7 +153,12 @@ class App:
         self, job_id: str, *, force_stage: StageName | None = None, no_cache: bool = False
     ) -> Job:
         job = self.db.get_job(job_id)
-        ctx = self.context(job)
+        try:
+            ctx = self.context(job)
+        except Exception as e:
+            # иначе job навсегда остаётся queued: Orchestrator ещё не начал писать статусы
+            self.db.set_job_failed(job_id, None, type(e).__name__, str(e), False)
+            raise
         Orchestrator(self.db).run(ctx, force_stage=force_stage, no_cache=no_cache)
         return self.db.get_job(job_id)
 

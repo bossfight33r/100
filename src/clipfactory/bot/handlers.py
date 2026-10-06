@@ -24,7 +24,7 @@ from aiogram.types import (
 )
 
 from clipfactory.bot.keyboards import campaigns_kb, clip_kb, parse_callback, retry_kb
-from clipfactory.bot.notify import TERMINAL, clip_caption, progress_text, safe_error
+from clipfactory.bot.notify import TERMINAL, _html, clip_caption, progress_text, safe_error
 from clipfactory.db import NotFound
 from clipfactory.log import get_logger
 from clipfactory.pipeline.ingest import is_url
@@ -366,6 +366,13 @@ async def track_job(bot: Bot, chat_id: int, tj: TrackJob, ctl: BotController, rt
         runner_done = runner is None or runner.done()
         if status in TERMINAL and runner_done:
             break
+        if runner is not None and runner.done() and runner.exception() is not None:
+            # запуск упал до того, как pipeline записал статус (Redis недоступен и т.п.)
+            await bot.send_message(
+                chat_id,
+                f"Не удалось запустить job: {_html(safe_error(str(runner.exception())))}",
+            )
+            return
     if runner is not None and runner.exception() is not None:
         log.warning("bot.job_runner_error", job_id=tj.job_id, error=str(runner.exception()))
     await send_outs(bot, chat_id, ctl.after_job(tj.job_id), ctl, rt)

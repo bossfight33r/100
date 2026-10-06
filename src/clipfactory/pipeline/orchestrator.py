@@ -8,7 +8,7 @@ import time
 from clipfactory.backends.face.mediapipe import FaceDetectorError
 from clipfactory.backends.llm.base import LLMError
 from clipfactory.backends.transcriber.base import TranscriberError
-from clipfactory.db import Database
+from clipfactory.db import Database, NotFound
 from clipfactory.log import get_logger
 from clipfactory.media import ffmpeg
 from clipfactory.pipeline.captions import CaptionsStage
@@ -249,7 +249,11 @@ class Orchestrator:
         return results
 
     def sync_clips(self, ctx: StageContext) -> None:
-        """Записать отрендеренные клипы в DB (статус ревью не трогаем)."""
+        """Записать отрендеренные клипы в DB.
+
+        Статус ревью и правка метаданных сохраняются, только если клип с тем же id
+        вырезан из того же места; новый выбор select под старым id ревьюится заново.
+        """
         highlights = ctx.read_model(ctx.key("highlights.json"), Highlights)
         ids = []
         for cand in highlights.candidates:
@@ -257,9 +261,14 @@ class Orchestrator:
             ctx.read_model(meta_key, ClipMeta)
             existing_status = None
             try:
-                existing_status = self.db.get_clip(ctx.job.id, cand.id).status
-            except Exception:  # noqa: S110 — клипа ещё нет
-                pass
+                existing = self.db.get_clip(ctx.job.id, cand.id)
+            except NotFound:
+                existing = None
+            if existing is not None:
+                if (existing.start, existing.end) == (cand.start, cand.end):
+                    existing_status = existing.status
+                else:
+                    self.db.set_clip_meta_override(ctx.job.id, cand.id, None)
             record = ClipRecord(
                 job_id=ctx.job.id,
                 clip_id=cand.id,

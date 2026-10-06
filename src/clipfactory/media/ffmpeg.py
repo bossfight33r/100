@@ -274,22 +274,30 @@ def iter_frames(
         )
         assert proc.stdout is not None
         idx = 0
+        eof = False
         try:
             while True:
                 if time.monotonic() - started > timeout:
                     raise FFmpegTimeout(f"frame extraction timed out after {timeout:.0f}s")
                 buf = proc.stdout.read(frame_size)
                 if len(buf) < frame_size:
+                    eof = True
                     break
                 frame = np.frombuffer(buf, dtype=np.uint8).reshape(height, width, 3)
                 yield idx / fps, frame
                 idx += 1
         finally:
             proc.stdout.close()
-            if proc.poll() is None:
+            if eof:
+                # stdout закрыт — ffmpeg завершается сам; kill здесь спрятал бы его код ошибки
+                try:
+                    proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            elif proc.poll() is None:
                 proc.kill()
             proc.wait()
-        if proc.returncode not in (0, -9):
+        if proc.returncode != 0:
             err.seek(0)
             tail = err.read()[-8192:].decode("utf-8", errors="replace")
             raise FFmpegError(

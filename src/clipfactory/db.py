@@ -382,9 +382,14 @@ class Database:
             )
 
     def set_clip_meta_override(
-        self, job_id: str, clip_id: str, metas: list[PlatformClipMeta]
+        self, job_id: str, clip_id: str, metas: list[PlatformClipMeta] | None
     ) -> None:
-        payload = json.dumps([m.model_dump(mode="json") for m in metas], ensure_ascii=False)
+        """None — снять правку (метаданные снова берутся из meta.json)."""
+        payload = (
+            json.dumps([m.model_dump(mode="json") for m in metas], ensure_ascii=False)
+            if metas is not None
+            else None
+        )
         with self.connect() as c:
             c.execute(
                 "UPDATE clips SET meta_override=?, updated_at=? WHERE job_id=? AND clip_id=?",

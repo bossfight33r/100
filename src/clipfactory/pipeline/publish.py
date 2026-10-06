@@ -13,7 +13,7 @@ from typing import Any
 from clipfactory.log import get_logger
 from clipfactory.pipeline.review import ReviewService
 from clipfactory.publish.base import Publisher, PublishError, PublishRequest
-from clipfactory.publish.scheduler import plan_slots
+from clipfactory.publish.scheduler import SchedulingError, plan_slots
 from clipfactory.schemas import (
     Account,
     ClipStatus,
@@ -123,7 +123,8 @@ class PublishService:
                 self.db.save_publication(pub)
                 created.append(pub)
                 log.info("publish.scheduled", publication_id=pub.id, at=slot.isoformat())
-        self.db.set_job_status(job_id, JobStatus.scheduled)
+        # уже полностью опубликованный job не должен откатываться в scheduled
+        self._refresh_job_status(job_id)
         return created
 
     # ------------------------------------------------------------ publish
@@ -148,6 +149,20 @@ class PublishService:
                 self.db.save_publication(pub)
                 log.warning("publish.blocked_not_approved", publication_id=pub.id)
                 continue
+            if pub.scheduled_at is not None and pub.scheduled_at <= self.clock():
+                # слот прошёл (повтор после квоты/сети) — без перепланирования YouTube
+                # опубликовал бы сразу, мимо окон, daily_limit и интервала
+                try:
+                    pub.scheduled_at = self._replan(pub)
+                except SchedulingError as e:
+                    pub.status, pub.error = PublicationStatus.scheduled, str(e)[:500]
+                    self.db.save_publication(pub)
+                    log.error("publish.replan_failed", publication_id=pub.id)
+                    continue
+                self.db.save_publication(pub)
+                log.info(
+                    "publish.rescheduled", publication_id=pub.id, at=pub.scheduled_at.isoformat()
+                )
             metas = {m.platform: m for m in review.effective_meta(pub.job_id, pub.clip_id)}
             meta = metas.get(pub.platform) or next(iter(metas.values()))
             if meta.platform != pub.platform:
@@ -183,6 +198,15 @@ class PublishService:
             log.info("publish.done", publication_id=pub.id, status=result.status.value)
         self._refresh_job_status(job_id)
         return done
+
+    def _replan(self, pub: Publication) -> datetime:
+        account = self.app.settings.accounts[pub.account_id]
+        existing = [
+            p.scheduled_at
+            for p in self.db.list_publications(account_id=pub.account_id, statuses=ACTIVE_PUB)
+            if p.id != pub.id and p.scheduled_at
+        ]
+        return plan_slots(account, 1, now=self.clock(), existing=existing)[0]
 
     def mark_due_published(self) -> int:
         """YouTube публикует сам по publishAt; отмечаем такие публикации как published."""
