@@ -433,8 +433,8 @@ def build_router(ctl: BotController, rt: Runtime, inbox: Path) -> Router:
             await bot.download(media, destination=dest)
         except Exception as e:
             await message.answer(
-                "Не удалось скачать файл (лимит Bot API — 20 МБ). Пришлите ссылку или путь к файлу.\n"
-                + safe_error(str(e), 200)
+                "Не удалось скачать файл (лимит облачного Bot API — 20 МБ; см. CF_TELEGRAM_API_URL "
+                "в docs/runbook.md). Пришлите ссылку или путь к файлу.\n" + safe_error(str(e), 200)
             )
             return
         await send_outs(

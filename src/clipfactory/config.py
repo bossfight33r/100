@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     ffmpeg_timeout_sec: float = 3600
 
+    # Локальный Telegram Bot API server (лимит файлов 2 ГБ вместо 20 МБ), например http://localhost:8081
+    telegram_api_url: str | None = None
+
     admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
     youtube_client_secrets: Path = Path("data/secrets/youtube_client_secret.json")
 

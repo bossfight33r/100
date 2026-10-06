@@ -16,6 +16,17 @@ class BotConfigError(Exception):
     pass
 
 
+def build_session(settings: Any) -> Any | None:
+    """Сессия для локального Bot API server; None — облачный api.telegram.org."""
+    if not settings.telegram_api_url:
+        return None
+    from aiogram.client.session.aiohttp import AiohttpSession
+    from aiogram.client.telegram import TelegramAPIServer
+
+    api = TelegramAPIServer.from_base(settings.telegram_api_url.rstrip("/"), is_local=True)
+    return AiohttpSession(api=api)
+
+
 def build_dispatcher(app: Any, rt: Runtime | None = None) -> tuple[Dispatcher, BotController]:
     if not app.settings.admin_ids:
         raise BotConfigError("CF_ADMIN_IDS is empty — the bot would answer nobody")
@@ -34,7 +45,11 @@ async def run_bot(app: Any) -> None:  # pragma: no cover - сеть
     if token is None or not token.get_secret_value():
         raise BotConfigError("TELEGRAM_BOT_TOKEN is not set")
     dp, _ = build_dispatcher(app)
-    bot = Bot(token.get_secret_value(), default=DefaultBotProperties(parse_mode="HTML"))
+    bot = Bot(
+        token.get_secret_value(),
+        session=build_session(app.settings),
+        default=DefaultBotProperties(parse_mode="HTML"),
+    )
     log.info("bot.start", admins=len(app.settings.admin_ids))
     try:
         await dp.start_polling(bot, allowed_updates=["message", "callback_query"])

@@ -210,3 +210,14 @@ async def test_track_job_without_start_stops_on_terminal(tmp_path):
     )
     assert session.of(SendMessage)[-1].reply_markup is not None  # кнопка retry
     await bot.session.close()
+
+
+def test_local_bot_api_session(tmp_path):
+    from clipfactory.bot.main import build_session
+
+    app = make_fast_app(tmp_path, admin_ids=[ADMIN])
+    assert build_session(app.settings) is None
+    app.settings.telegram_api_url = "http://localhost:8081/"
+    session = build_session(app.settings)
+    assert session.api.is_local is True
+    assert session.api.api_url("T", "getMe").startswith("http://localhost:8081/bot")
