@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from clipfactory.log import get_logger
+from clipfactory.publish.youtube import fetch_stats
 from clipfactory.schemas import Platform, Publication, PublicationStatus, StatsSnapshot
 
 log = get_logger(__name__)
@@ -17,22 +18,6 @@ TRACKABLE = [PublicationStatus.scheduled, PublicationStatus.published, Publicati
 
 class TrackError(Exception):
     pass
-
-
-def fetch_youtube_stats(service: Any, video_ids: list[str]) -> dict[str, dict[str, int]]:
-    """views/likes/comments по id видео, батчами по 50 (videos.list стоит 1 единицу квоты)."""
-    out: dict[str, dict[str, int]] = {}
-    for i in range(0, len(video_ids), 50):
-        batch = video_ids[i : i + 50]
-        resp = service.videos().list(part="statistics", id=",".join(batch), maxResults=50).execute()
-        for item in resp.get("items", []):
-            st = item.get("statistics", {})
-            out[item["id"]] = {
-                "views": int(st.get("viewCount", 0)),
-                "likes": int(st.get("likeCount", 0)),
-                "comments": int(st.get("commentCount", 0)),
-            }
-    return out
 
 
 def default_youtube_service_factory(app: Any) -> Callable[[Any], Any]:  # pragma: no cover
@@ -62,7 +47,7 @@ def collect_youtube(
             log.warning("track.unknown_account", account_id=account_id)
             continue
         try:
-            stats = fetch_youtube_stats(factory(account), [p.external_id for p in pubs])
+            stats = fetch_stats(factory(account), [p.external_id for p in pubs])
         except Exception as e:  # одна ошибка аккаунта не останавливает остальные
             log.error("track.youtube_failed", account_id=account_id, error=str(e)[:300])
             continue

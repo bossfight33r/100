@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import shutil
 import urllib.parse
-import urllib.request
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from clipfactory.backends.downloader import (
+    Downloader,
+    DownloadError,
+    download_http,
+    download_ytdlp,
+)
 from clipfactory.log import get_logger
 from clipfactory.media import ffmpeg
 from clipfactory.media.models import MediaInfo
@@ -24,51 +27,9 @@ MP4_FAMILY = {"mov", "mp4", "m4a", "3gp", "3g2", "mj2"}
 MP4_VIDEO_CODECS = {"h264", "hevc", "av1", "mpeg4"}
 MP4_AUDIO_CODECS = {"aac", "mp3", "alac", "ac3", "eac3", "opus"}
 
-Downloader = Callable[[str, Path], Path]
-
 
 def is_url(source: str) -> bool:
     return urllib.parse.urlparse(source).scheme in ("http", "https")
-
-
-def download_http(url: str, dest_dir: Path) -> Path:
-    """Прямая загрузка медиафайла по HTTP(S) потоком."""
-    name = Path(urllib.parse.urlparse(url).path).name or "download.bin"
-    dest = dest_dir / name
-    req = urllib.request.Request(url, headers={"User-Agent": "clipfactory/0.1"})  # noqa: S310
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp, dest.open("wb") as f:  # noqa: S310
-            shutil.copyfileobj(resp, f, length=1024 * 1024)
-    except OSError as e:
-        raise SourceError(f"download failed: {e}", retryable=True) from e
-    return dest
-
-
-def download_ytdlp(url: str, dest_dir: Path) -> Path:  # pragma: no cover - сеть
-    try:
-        import yt_dlp
-    except ImportError as e:
-        raise SourceError("yt-dlp is not installed") from e
-    opts = {
-        "outtmpl": str(dest_dir / "download.%(ext)s"),
-        "format": "bv*[ext=mp4][height<=1080]+ba[ext=m4a]/b[ext=mp4][height<=1080]/bv*+ba/b",
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "noprogress": True,
-        "noplaylist": True,
-    }
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            path = Path(ydl.prepare_filename(info))
-    except Exception as e:
-        raise SourceError(f"yt-dlp failed: {e}", retryable=True) from e
-    if not path.exists():
-        candidates = sorted(dest_dir.glob("download.*"))
-        if not candidates:
-            raise SourceError("yt-dlp produced no file")
-        path = candidates[0]
-    return path
 
 
 def needs_remux(info: MediaInfo) -> bool:
@@ -119,8 +80,13 @@ class IngestStage:
         dl_dir.mkdir(parents=True, exist_ok=True)
         ext = Path(urllib.parse.urlparse(src).path).suffix.lower()
         if ext in DIRECT_MEDIA_EXT:
-            return self.http_downloader(src, dl_dir)
-        return self.ytdlp_downloader(src, dl_dir)
+            downloader = self.http_downloader
+        else:
+            downloader = self.ytdlp_downloader
+        try:
+            return downloader(src, dl_dir)
+        except DownloadError as e:
+            raise SourceError(str(e), retryable=e.retryable) from e
 
     def run(self, ctx: StageContext) -> StageResult:
         fetched = self._fetch(ctx)

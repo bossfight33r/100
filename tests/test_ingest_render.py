@@ -102,3 +102,15 @@ def test_render_without_audio(tmp_path):
     assert ei.value.stage.value == "transcribe"
     failed = app.db.get_job(job.id)
     assert failed.failed_stage.value == "transcribe" and failed.retryable is False
+
+
+def test_download_error_becomes_retryable_source_error(tmp_path):
+    from clipfactory.backends.downloader import DownloadError
+
+    def failing(url, dest):
+        raise DownloadError("connection reset", retryable=True)
+
+    stage = IngestStage(http_downloader=failing, ytdlp_downloader=failing)
+    with pytest.raises(SourceError) as ei:
+        stage.run(_ctx(tmp_path, "https://cdn.example.com/v.mp4"))
+    assert ei.value.retryable is True

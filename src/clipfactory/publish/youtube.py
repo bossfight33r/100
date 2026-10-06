@@ -196,3 +196,19 @@ class YouTubePublisher:
             external_id=video_id,
             url=f"https://youtube.com/shorts/{video_id}",
         )
+
+
+def fetch_stats(service: Any, video_ids: list[str]) -> dict[str, dict[str, int]]:
+    """views/likes/comments по id видео, батчами по 50 (videos.list стоит 1 единицу квоты)."""
+    out: dict[str, dict[str, int]] = {}
+    for i in range(0, len(video_ids), 50):
+        batch = video_ids[i : i + 50]
+        resp = service.videos().list(part="statistics", id=",".join(batch), maxResults=50).execute()
+        for item in resp.get("items", []):
+            st = item.get("statistics", {})
+            out[item["id"]] = {
+                "views": int(st.get("viewCount", 0)),
+                "likes": int(st.get("likeCount", 0)),
+                "comments": int(st.get("commentCount", 0)),
+            }
+    return out
