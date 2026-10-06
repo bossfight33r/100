@@ -8,13 +8,19 @@ from __future__ import annotations
 
 import hashlib
 import re
+from pathlib import Path
 from string import Template
 from typing import Any
 
 from clipfactory.backends.llm.base import LLMError, parse_json_loose
 from clipfactory.log import get_logger
 from clipfactory.media import ffmpeg
-from clipfactory.media.filters import render_filtergraph
+from clipfactory.media.filters import (
+    loudnorm_apply_filter,
+    loudnorm_measure_filter,
+    parse_loudnorm_json,
+    render_filtergraph,
+)
 from clipfactory.media.probe import ProbeError, probe
 from clipfactory.pipeline import clipcache
 from clipfactory.pipeline.context import StageContext, ValidationFailed, config_hash
@@ -169,7 +175,7 @@ def validate_video(path: Any, expected_duration: float, has_audio: bool, fps: in
 
 class RenderStage:
     name = StageName.render
-    version = 1
+    version = 2  # v2: двухпроходная нормализация громкости (-14 LUFS)
 
     @staticmethod
     def meta_config(ctx: StageContext) -> dict[str, Any]:
@@ -245,6 +251,22 @@ class RenderStage:
             stage=self.name, outputs=outputs, info={"encoder": encoder.name, "clips_reused": reused}
         )
 
+    @staticmethod
+    def _measure_loudness(
+        ctx: StageContext, src: Any, cand: ClipCandidate, log_path: Any
+    ) -> str | None:
+        """Первый проход loudnorm по звуку клипа. None — тишина: останется однопроходный."""
+        ffmpeg.ffmpeg(
+            ["-ss", f"{cand.start:.3f}", "-t", f"{cand.duration:.3f}", "-i", str(src),
+             "-vn", "-af", loudnorm_measure_filter(), "-f", "null", "-"],
+            log_path=log_path, cancel=ctx.cancel, timeout=ctx.settings.ffmpeg_timeout_sec,
+        )  # fmt: skip
+        measured = parse_loudnorm_json(Path(log_path).read_text(errors="replace"))
+        if measured is None:
+            log.warning("render.loudnorm_fallback", clip_id=cand.id)
+            return None
+        return loudnorm_apply_filter(measured)
+
     def _render_clip(
         self,
         ctx: StageContext,
@@ -257,7 +279,14 @@ class RenderStage:
         plan = ctx.read_model(ctx.clip_key(cand.id, "reframe.json"), ReframePlan)
         ass_path = ctx.local_path(ctx.clip_key(cand.id, "captions.ass"))
         clip_dir = ass_path.parent
+        log_path = ctx.log_path(self.name, f"-{cand.id}")
+        loudnorm = (
+            self._measure_loudness(ctx, src, cand, log_path.with_name(log_path.stem + "-loud.log"))
+            if has_audio
+            else None
+        )
         graph = render_filtergraph(
+            loudnorm=loudnorm,
             keyframes=plan.keyframes,
             target_width=plan.target_width,
             target_height=plan.target_height,
@@ -270,7 +299,6 @@ class RenderStage:
         )
         video_key = ctx.clip_key(cand.id, "final.mp4")
         tmp_video = clip_dir / ".final.tmp.mp4"
-        log_path = ctx.log_path(self.name, f"-{cand.id}")
         ffmpeg.ffmpeg(
             render_args(
                 source=str(src), cand=cand, plan=plan,
