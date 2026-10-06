@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     chunk_overlap_seconds: float = 60
 
     queue: Literal["inline", "rq"] = "inline"
+    # Маршрутизация (compute/routing.py): доп. теги воркера и требования job к воркеру
+    worker_tags: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    job_require_tags: Annotated[list[str], NoDecode] = Field(default_factory=list)
     redis_url: str = "redis://localhost:6379/0"
     ffmpeg_timeout_sec: float = 3600
 
@@ -69,6 +72,13 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr | None = Field(
         default=None, validation_alias="TELEGRAM_BOT_TOKEN"
     )
+
+    @field_validator("worker_tags", "job_require_tags", mode="before")
+    @classmethod
+    def _tags(cls, v: object) -> object:
+        if isinstance(v, str):
+            return [t.strip() for t in v.split(",") if t.strip()]
+        return v
 
     @field_validator("admin_ids", mode="before")
     @classmethod

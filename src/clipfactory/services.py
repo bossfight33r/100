@@ -13,6 +13,7 @@ from clipfactory.backends.encoder.base import EncoderBackend, select_encoder
 from clipfactory.backends.face.base import FaceDetector
 from clipfactory.backends.llm.base import LLMProvider
 from clipfactory.backends.transcriber.base import Transcriber
+from clipfactory.compute.capabilities import TaskRequirements
 from clipfactory.config import Settings
 from clipfactory.db import Database
 from clipfactory.log import get_logger
@@ -257,9 +258,30 @@ class App:
         self.db.clear_cancel(job_id)
         self.db.set_job_status(job_id, JobStatus.queued)
         task = make_run_task(
-            job_id, force_stage=force_stage.value if force_stage else None, no_cache=no_cache
+            job_id,
+            force_stage=force_stage.value if force_stage else None,
+            no_cache=no_cache,
+            requirements=self.job_requirements(),
         )
-        return self.queue.enqueue(task)
+        task_id = self.queue.enqueue(task)
+        self._warn_if_no_worker(task.requirements)
+        return task_id
+
+    def job_requirements(self) -> TaskRequirements:
+        """Требования job к воркеру (CF_JOB_REQUIRE_TAGS, например gpu или mac)."""
+        return TaskRequirements(tags=list(self.settings.job_require_tags))
+
+    def _warn_if_no_worker(self, req: TaskRequirements) -> None:
+        conn = getattr(self.queue, "connection", None)
+        if conn is None:
+            return
+        from clipfactory.compute.routing import eligible_workers, live_workers
+
+        try:
+            if not eligible_workers(req, live_workers(conn)):
+                log.warning("queue.no_eligible_worker", tags=req.tags)
+        except Exception as e:  # диагностика не должна мешать постановке
+            log.debug("queue.worker_check_failed", error=str(e))
 
     def cancel_job(self, job_id: str) -> str:
         """Отменить job: снять из очереди или попросить работающий pipeline остановиться."""

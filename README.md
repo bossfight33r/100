@@ -71,8 +71,8 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 - **S3/MinIO** вместо локальной ФС: `CF_STORAGE=s3 CF_S3_BUCKET=... [CF_S3_ENDPOINT_URL=http://minio:9000]`, `uv pip install -e '.[s3]'`, ключи — стандартные `AWS_*`.
 - **NVENC** на GPU-сервере: выбирается автоматически, если реально кодирует (`cf capabilities` → «H.264 рабочие»).
 - **Ollama** вместо Anthropic: `CF_LLM_PROVIDER=ollama CF_OLLAMA_MODEL=qwen2.5:7b-instruct`.
+- **Маршрутизация на воркеры** (ADR-0012): `CF_JOB_REQUIRE_TAGS=gpu` при постановке — задачу возьмёт только воркер с тегом `gpu` (NVENC реально кодирует или `CF_WORKER_TAGS=gpu`).
 
 ## Дальше
 
-- `compute/routing.py` — маршрутизация задач по `TaskRequirements`/`WorkerCapabilities` на удалённые воркеры.
-- PostgreSQL вместо SQLite (весь SQL изолирован в `db.py`).
+- PostgreSQL вместо SQLite для нескольких машин без общего диска (весь SQL изолирован в `db.py`).

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from clipfactory.compute.capabilities import TaskRequirements
 from clipfactory.log import get_logger
 from clipfactory.queue.base import Queue, Task, TaskStatus
 from clipfactory.schemas import JobStatus
@@ -25,11 +26,18 @@ def run_job_task_id(job_id: str) -> str:
     return f"run-{job_id}"
 
 
-def make_run_task(job_id: str, *, force_stage: str | None = None, no_cache: bool = False) -> Task:
+def make_run_task(
+    job_id: str,
+    *,
+    force_stage: str | None = None,
+    no_cache: bool = False,
+    requirements: TaskRequirements | None = None,
+) -> Task:
     return Task(
         id=run_job_task_id(job_id),
         kind="run_job",
         payload={"job_id": job_id, "force_stage": force_stage, "no_cache": no_cache},
+        requirements=requirements or TaskRequirements(),
     )
 
 
@@ -77,7 +85,7 @@ def recover(app: Any, queue: Queue) -> list[str]:
         if queue.status(task_id) in (TaskStatus.queued, TaskStatus.running):
             continue  # задача жива (мёртвые started-задачи RQ чистит cleanup() до recover)
         app.db.abandon_stage_runs(job.id)
-        queue.enqueue(make_run_task(job.id))
+        queue.enqueue(make_run_task(job.id, requirements=app.job_requirements()))
         requeued.append(job.id)
         log.warning("worker.recovered_job", job_id=job.id, previous_status=job.status.value)
     return requeued
@@ -88,12 +96,23 @@ def run_worker(app: Any, *, burst: bool = False) -> None:  # pragma: no cover - 
     from rq import SimpleWorker
     from rq.registry import StartedJobRegistry
 
+    from clipfactory.compute.capabilities import detect
+    from clipfactory.compute.routing import Heartbeat, derive_tags, queues_for_worker, worker_name
     from clipfactory.queue.rq import RQQueue
 
     queue = RQQueue(app.settings.redis_url)
-    StartedJobRegistry(queue=queue.rq_queue).cleanup()
+    caps = detect()
+    caps.tags = sorted({*caps.tags, *derive_tags(caps, app.settings.worker_tags)})
+    names = queues_for_worker(derive_tags(caps, app.settings.worker_tags), queue.base)
+    rq_queues = [queue.queue(n) for n in names]
+    for q in rq_queues:
+        StartedJobRegistry(queue=q).cleanup()
     recovered = recover(app, queue)
-    log.info("worker.start", recovered=len(recovered), redis=app.settings.redis_url.split("@")[-1])
-    SimpleWorker([queue.rq_queue], connection=queue.connection).work(
-        burst=burst, with_scheduler=False
+    log.info(
+        "worker.start",
+        recovered=len(recovered),
+        queues=names,
+        redis=app.settings.redis_url.split("@")[-1],
     )
+    with Heartbeat(queue.connection, worker_name(), caps):
+        SimpleWorker(rq_queues, connection=queue.connection).work(burst=burst, with_scheduler=False)

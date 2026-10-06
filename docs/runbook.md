@@ -35,6 +35,20 @@ export CF_QUEUE=rq
 - Отмена: `cf cancel JOB_ID` (или `/cancel` в боте). Задача в очереди снимается; идущая job получает флаг в SQLite, воркер прерывает ffmpeg в течение ~1 с и помечает job `failed` с `error_type=cancelled` (retryable). Продолжить — `cf retry JOB_ID`, готовые этапы и клипы возьмутся из кеша. Вызов Whisper/LLM не прерывается посередине — отмена сработает сразу после него.
 - Повторный `cf retry`/`enqueue` для job, которая уже в очереди или выполняется, отклоняется (`JobBusy`) — дублей задач нет.
 
+## Несколько машин (S3 + маршрутизация)
+
+```bash
+# общее: Redis, S3/MinIO и SQLite на общем диске (или одна машина-оркестратор)
+export CF_QUEUE=rq CF_STORAGE=s3 CF_S3_BUCKET=clipfactory CF_S3_ENDPOINT_URL=http://minio:9000
+# GPU-сервер: тег gpu ставится сам, если h264_nvenc реально кодирует
+.venv/bin/cf capabilities && .venv/bin/cf worker
+# Мак: ставить задачи на GPU
+CF_JOB_REQUIRE_TAGS=gpu .venv/bin/cf enqueue video.mp4 -c example
+```
+
+- `queue.no_eligible_worker` в логе при постановке — нет живого воркера с нужными тегами (heartbeat 60 с); задача ждёт в своей очереди.
+- Воркер слушает `clipfactory@<теги>` для всех подмножеств своих тегов и `clipfactory`.
+
 ## Telegram-бот
 
 ```bash

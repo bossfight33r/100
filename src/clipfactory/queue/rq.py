@@ -39,15 +39,24 @@ class RQQueue:
         from rq import Queue as _RQ
 
         self.connection = connection or redis.Redis.from_url(redis_url)
-        self._q = _RQ(name, connection=self.connection)
+        self.base = name
+        self._rq_cls = _RQ
+        self._queues: dict[str, Any] = {}
         self.job_timeout = job_timeout
+
+    def queue(self, name: str) -> Any:
+        if name not in self._queues:
+            self._queues[name] = self._rq_cls(name, connection=self.connection)
+        return self._queues[name]
 
     @property
     def rq_queue(self) -> Any:
-        return self._q
+        return self.queue(self.base)
 
     def enqueue(self, task: Task) -> str:
-        self._q.enqueue(
+        from clipfactory.compute.routing import queue_for
+
+        self.queue(queue_for(task.requirements, self.base)).enqueue(
             EXECUTOR,
             task.model_dump(mode="json"),
             job_id=task.id,
