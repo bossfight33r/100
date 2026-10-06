@@ -25,6 +25,7 @@ from aiogram.types import (
 
 from clipfactory.bot.keyboards import campaigns_kb, clip_kb, parse_callback, retry_kb
 from clipfactory.bot.notify import TERMINAL, _html, clip_caption, progress_text, safe_error
+from clipfactory.config import ConfigError
 from clipfactory.db import NotFound
 from clipfactory.log import get_logger
 from clipfactory.pipeline.ingest import is_url
@@ -186,7 +187,7 @@ class BotController:
             if cb.kind == "clips":
                 return self.clip_cards(cb.job_id)
             return self._review(user_id, cb.action, cb.job_id, cb.clip_id)
-        except (ReviewError, NotFound, ValueError) as e:
+        except (ReviewError, NotFound, ValueError, ConfigError) as e:
             return [Reply(f"Не получилось: {safe_error(str(e))}")]
 
     def _start_job(self, user_id: int, campaign_id: str) -> list[Out]:

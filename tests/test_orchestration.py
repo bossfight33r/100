@@ -206,3 +206,32 @@ def test_rq_queue_cancel():
     assert q.cancel(tid) is True
     assert q.status(tid) == TaskStatus.cancelled
     assert q.cancel("missing") is False
+
+
+def test_enqueue_rejects_duplicate_task(env):
+    from clipfactory.queue.base import TaskStatus
+    from clipfactory.services import JobBusy
+
+    app, job_id, _, _ = env
+
+    class BusyQueue:
+        def status(self, task_id):
+            return TaskStatus.queued
+
+        def enqueue(self, task):  # pragma: no cover - не должен вызываться
+            raise AssertionError("duplicate enqueue")
+
+    app.__dict__["queue"] = BusyQueue()
+    with pytest.raises(JobBusy):
+        app.enqueue_job(job_id)
+
+
+def test_cli_unknown_campaign_is_clean_error(tmp_path, monkeypatch, short_video):
+    from typer.testing import CliRunner
+
+    from clipfactory.cli import app as cli
+
+    monkeypatch.setenv("CF_DATA_DIR", str(tmp_path / "d"))
+    res = CliRunner().invoke(cli, ["run", str(short_video), "--campaign", "nope"])
+    assert res.exit_code == 1 and "unknown campaign" in res.output
+    assert "Traceback" not in res.output

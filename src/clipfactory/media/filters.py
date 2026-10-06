@@ -33,10 +33,12 @@ def crop_filter(keyframes: Sequence[CropKeyframe]) -> str:
 
 
 def escape_filter_value(value: str) -> str:
-    """Экранирование значения опции фильтра (путь к файлу и т.п.)."""
-    for ch in ("\\", "'", ":", ",", "[", "]", ";"):
-        value = value.replace(ch, "\\" + ch)
-    return value
+    """Экранирование значения опции фильтра для -filter_complex (два уровня ffmpeg).
+
+    1) уровень опции фильтра: \\ ' : ; 2) уровень filtergraph: \\ ' [ ] , ;
+    """
+    level1 = "".join("\\" + ch if ch in "\\':" else ch for ch in value)
+    return "".join("\\" + ch if ch in "\\'[],;" else ch for ch in level1)
 
 
 def render_filtergraph(

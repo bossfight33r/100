@@ -136,10 +136,14 @@ def run(
     no_cache: NoCache = False,
 ) -> None:
     """Синхронно выполнить весь pipeline для SOURCE."""
+    from clipfactory.config import ConfigError
     from clipfactory.pipeline.orchestrator import JobFailed
 
     app_ = _app()
-    job = app_.create_job(source, campaign)
+    try:
+        job = app_.create_job(source, campaign)
+    except ConfigError as e:
+        _fail(str(e))
     if not _state["json"]:
         typer.echo(f"Job {job.id} создан, запускаю pipeline...")
     try:
@@ -157,8 +161,13 @@ def enqueue(
     no_cache: NoCache = False,
 ) -> None:
     """Создать job и поставить в очередь (CF_QUEUE=rq — выполнит `cf worker`)."""
+    from clipfactory.config import ConfigError
+
     app_ = _app()
-    job = app_.create_job(source, campaign)
+    try:
+        job = app_.create_job(source, campaign)
+    except ConfigError as e:
+        _fail(str(e))
     task_id = app_.enqueue_job(job.id, no_cache=no_cache)
     _out({"job_id": job.id, "task_id": task_id}, f"Job {job.id} поставлен в очередь ({task_id})")
 
@@ -240,6 +249,9 @@ def publish(
     schedule_only: Annotated[
         bool, typer.Option("--schedule-only", help="Только распределить по слотам, не загружать")
     ] = False,
+    retry_failed: Annotated[
+        bool, typer.Option("--retry-failed", help="Повторить упавшие публикации одобренных клипов")
+    ] = False,
 ) -> None:
     """Запланировать одобренные клипы по слотам аккаунтов и опубликовать/экспортировать."""
     from clipfactory.pipeline.publish import PublishService, PublishServiceError
@@ -248,6 +260,8 @@ def publish(
     app_ = _app()
     svc = PublishService(app_)
     try:
+        if retry_failed:
+            svc.retry_failed(job_id)
         svc.schedule_job(job_id)
         if not schedule_only:
             svc.publish_job(job_id)

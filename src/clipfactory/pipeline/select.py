@@ -120,7 +120,9 @@ def sanitize(raw: object, lo: float, hi: float) -> list[RawHighlight]:
     return out
 
 
-def ask_llm(llm: Any, system: str, prompt: str, lo: float, hi: float) -> list[RawHighlight]:
+def ask_llm(
+    llm: Any, system: str, prompt: str, lo: float, hi: float, max_tokens: int = 16000
+) -> list[RawHighlight]:
     last = "unknown"
     for attempt in range(1, MAX_LLM_ATTEMPTS + 1):
         p = prompt
@@ -130,7 +132,7 @@ def ask_llm(llm: Any, system: str, prompt: str, lo: float, hi: float) -> list[Ra
                 "Each item: title, start_time, end_time, score, hook_sentence, virality_reason."
             )
         try:
-            raw = llm.complete(system=system, prompt=p)
+            raw = llm.complete(system=system, prompt=p, max_tokens=max_tokens)
         except LLMError as e:
             if not e.retryable or attempt == MAX_LLM_ATTEMPTS:
                 raise
@@ -296,6 +298,7 @@ def select_highlights(
     *,
     chunk_sec: float,
     overlap_sec: float,
+    max_tokens: int = 16000,
 ) -> list[ClipCandidate]:
     template = Template(load_prompt("highlights.md"))
     system = template.substitute(
@@ -310,7 +313,7 @@ def select_highlights(
             f"CHUNK_RANGE: {chunk.start:.2f}-{chunk.end:.2f}\n"
             f"Transcript (format: [start-end] text, seconds):\n{chunk.text}"
         )
-        raw.extend(ask_llm(llm, system, prompt, chunk.start, chunk.end))
+        raw.extend(ask_llm(llm, system, prompt, chunk.start, chunk.end, max_tokens))
     refined = dedupe(refine(raw, transcript, campaign))
     top = sorted(refined, key=lambda c: (-c.score, c.start))[: campaign.clip_count]
     # id по хронологии: c01, c02... — стабильные и читаемые
@@ -345,6 +348,7 @@ class SelectStage:
             ctx.backends.llm,
             chunk_sec=ctx.settings.chunk_seconds,
             overlap_sec=ctx.settings.chunk_overlap_seconds,
+            max_tokens=ctx.settings.llm_max_tokens,
         )
         if not candidates:
             raise NoHighlightsError("LLM returned no usable highlights for this video")

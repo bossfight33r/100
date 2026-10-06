@@ -29,6 +29,12 @@ ACTIVE_PUB = [PublicationStatus.scheduled, PublicationStatus.publishing, Publica
               PublicationStatus.exported]  # fmt: skip
 
 
+INTERRUPTED = (
+    "upload was interrupted; check the channel for a duplicate, then "
+    "`cf publish JOB_ID --retry-failed` to upload again"
+)
+
+
 class PublishServiceError(Exception):
     pass
 
@@ -95,7 +101,9 @@ class PublishService:
         created: list[Publication] = []
         for acc in self._accounts(job.campaign_id):
             existing_pubs = self.db.list_publications(account_id=acc.id, statuses=ACTIVE_PUB)
-            already = {(p.job_id, p.clip_id) for p in existing_pubs}
+            # любая существующая публикация (и failed тоже) — уже обработана; повтор
+            # упавших только явно через retry_failed, иначе возможен дубль на канале
+            already = {(p.job_id, p.clip_id) for p in self.db.list_publications(account_id=acc.id)}
             todo = [
                 c
                 for c in sorted(clips, key=lambda c: -c.score)
@@ -129,8 +137,37 @@ class PublishService:
 
     # ------------------------------------------------------------ publish
 
+    def fail_interrupted(self, job_id: str) -> list[Publication]:
+        """Публикации, застрявшие в 'publishing' (процесс упал во время загрузки) -> failed.
+
+        Повторять автоматически нельзя: загрузка могла завершиться на стороне платформы,
+        и повтор создал бы дубль. Повтор — явно, через ``retry_failed`` после проверки.
+        """
+        stuck = self.db.list_publications(job_id=job_id, statuses=[PublicationStatus.publishing])
+        for pub in stuck:
+            pub.status, pub.error = PublicationStatus.failed, INTERRUPTED
+            self.db.save_publication(pub)
+            log.error("publish.interrupted", publication_id=pub.id)
+        return stuck
+
+    def retry_failed(self, job_id: str) -> list[Publication]:
+        """Вернуть в очередь упавшие публикации одобренных клипов (без external_id)."""
+        reset = []
+        for pub in self.db.list_publications(job_id=job_id, statuses=[PublicationStatus.failed]):
+            if pub.external_id is not None:
+                continue
+            if self.db.get_clip(pub.job_id, pub.clip_id).status != ClipStatus.approved:
+                continue
+            pub.status, pub.error = PublicationStatus.scheduled, None
+            self.db.save_publication(pub)
+            reset.append(pub)
+        if reset:
+            self._refresh_job_status(job_id)
+        return reset
+
     def publish_job(self, job_id: str) -> list[Publication]:
         """Загрузить/экспортировать все запланированные публикации job."""
+        self.fail_interrupted(job_id)
         pubs = [
             p
             for p in self.db.list_publications(job_id=job_id)

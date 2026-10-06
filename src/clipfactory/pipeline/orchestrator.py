@@ -29,6 +29,7 @@ from clipfactory.schemas import (
     STAGE_STATUS,
     ClipMeta,
     ClipRecord,
+    ClipStatus,
     Highlights,
     JobStatus,
     StageManifest,
@@ -268,7 +269,9 @@ class Orchestrator:
                 if (existing.start, existing.end) == (cand.start, cand.end):
                     existing_status = existing.status
                 else:
+                    # upsert не трогает статус — сбрасываем явно
                     self.db.set_clip_meta_override(ctx.job.id, cand.id, None)
+                    self.db.set_clip_status(ctx.job.id, cand.id, ClipStatus.pending_review)
             record = ClipRecord(
                 job_id=ctx.job.id,
                 clip_id=cand.id,

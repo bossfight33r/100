@@ -23,6 +23,10 @@ from clipfactory.schemas import Job, JobStatus, ReviewOverrides, StageName, utcn
 from clipfactory.storage.local import LocalStorage
 
 
+class JobBusy(ValueError):
+    """Задача job уже в очереди или выполняется — второй экземпляр не ставим."""
+
+
 def build_transcriber(settings: Settings) -> Transcriber:
     from clipfactory.backends.transcriber.mlx import mlx_available
 
@@ -177,8 +181,11 @@ class App:
     def enqueue_job(
         self, job_id: str, *, force_stage: StageName | None = None, no_cache: bool = False
     ) -> str:
-        from clipfactory.worker import make_run_task
+        from clipfactory.queue.base import TaskStatus
+        from clipfactory.worker import make_run_task, run_job_task_id
 
+        if self.queue.status(run_job_task_id(job_id)) in (TaskStatus.queued, TaskStatus.running):
+            raise JobBusy(f"job {job_id} is already queued or running")
         self.db.set_job_status(job_id, JobStatus.queued)
         task = make_run_task(
             job_id, force_stage=force_stage.value if force_stage else None, no_cache=no_cache

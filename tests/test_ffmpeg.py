@@ -122,3 +122,23 @@ def test_requirements_matching():
     assert satisfies(caps, TaskRequirements(transcriber="mlx", encoder="any_h264")) == []
     problems = satisfies(caps, TaskRequirements(min_ram_mb=32000, encoder="libx264", tags=["gpu"]))
     assert len(problems) == 3
+
+
+@needs_ffmpeg
+def test_fonts_dir_with_special_chars_survives_filtergraph(tmp_path):
+    """Путь с : ' [ ] , ; в fontsdir — два уровня экранирования ffmpeg."""
+    from clipfactory.media.filters import escape_filter_value
+
+    fonts = tmp_path / "шрифты: it's [x],y;z"
+    fonts.mkdir()
+    (tmp_path / "captions.ass").write_text(
+        "[Script Info]\nScriptType: v4.00+\n\n[Events]\nFormat: Layer, Start, End, Style, Text\n",
+        encoding="utf-8",
+    )
+    graph = f"[0:v]ass=filename=captions.ass:fontsdir={escape_filter_value(str(fonts))}[v]"
+    ffmpeg.ffmpeg(
+        ["-f", "lavfi", "-i", "color=s=64x64:d=1", "-filter_complex", graph,
+         "-map", "[v]", "-frames:v", "1", "out.png"],
+        cwd=tmp_path,
+    )  # fmt: skip
+    assert (tmp_path / "out.png").exists()

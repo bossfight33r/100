@@ -186,3 +186,81 @@ def test_token_file_permissions(tmp_path):
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     with pytest.raises(PublishError):
         token_path(tmp_path, Account(id="b", platform="youtube", name="b"))
+
+
+@needs_ffmpeg
+@pytest.mark.slow
+def test_interrupted_upload_not_retried_automatically(tmp_path):
+    src = make_synthetic_video(tmp_path / "v.mp4", duration=30)
+    app = make_fast_app(tmp_path)
+    job = app.create_job(str(src), "fast")
+    app.run_job(job.id)
+    clip = app.db.list_clips(job.id)[0]
+    ReviewService(app).approve(job.id, clip.clip_id)
+    svc, yt = service(app)
+    [yt_pub, _] = sorted(svc.schedule_job(job.id), key=lambda p: p.platform.value != "youtube")
+    # процесс упал посреди загрузки
+    yt_pub.status = PublicationStatus.publishing
+    app.db.save_publication(yt_pub)
+
+    svc.publish_job(job.id)
+    stuck = app.db.get_publication(yt_pub.id)
+    assert stuck.status == PublicationStatus.failed and "interrupted" in stuck.error
+    assert yt.inserts == []
+    svc.schedule_job(job.id)  # повторное планирование не воскрешает failed
+    assert app.db.get_publication(yt_pub.id).status == PublicationStatus.failed
+
+    assert [p.id for p in svc.retry_failed(job.id)] == [yt_pub.id]
+    svc.publish_job(job.id)
+    assert len(yt.inserts) == 1
+    assert app.db.get_publication(yt_pub.id).external_id == "vid1"
+
+
+@needs_ffmpeg
+@pytest.mark.slow
+def test_past_slot_is_replanned_not_published_immediately(tmp_path):
+    src = make_synthetic_video(tmp_path / "v.mp4", duration=30)
+    app = make_fast_app(tmp_path)
+    job = app.create_job(str(src), "fast")
+    app.run_job(job.id)
+    clip = app.db.list_clips(job.id)[0]
+    ReviewService(app).approve(job.id, clip.clip_id)
+    svc, yt = service(app)
+    pubs = svc.schedule_job(job.id)
+    yt_pub = next(p for p in pubs if p.platform == Platform.youtube)
+    # квота/сеть: прошло два дня, слот уже в прошлом
+    later = yt_pub.scheduled_at + timedelta(days=2)
+    svc.clock = lambda: later
+    svc.publishers[Platform.youtube].clock = lambda: later
+    svc.publish_job(job.id)
+    [body] = yt.inserts
+    assert body["status"]["privacyStatus"] == "private"
+    assert app.db.get_publication(yt_pub.id).scheduled_at > later
+
+
+@needs_ffmpeg
+@pytest.mark.slow
+def test_clip_status_reset_when_select_picks_new_moment(tmp_path):
+    from clipfactory.schemas import ClipStatus, StageName
+
+    src = make_synthetic_video(tmp_path / "v.mp4", duration=30)
+    app = make_fast_app(tmp_path)
+    job = app.create_job(str(src), "fast")
+    app.run_job(job.id)
+    clip = app.db.list_clips(job.id)[0]
+    review = ReviewService(app)
+    review.approve(job.id, clip.clip_id)
+    review.edit_metadata(job.id, clip.clip_id, title="Одобренный заголовок")
+    # другая LLM-выдача: c01 теперь другой момент
+    from clipfactory.backends.llm.fake import FakeLLM
+
+    other = json.dumps({"highlights": [{"start_time": 15, "end_time": 25, "score": 99,
+                                        "hook_sentence": "новый"}]})  # fmt: skip
+    app.llm_factory = lambda: FakeLLM(
+        responder=lambda sys_, p: other if "TASK: highlights" in sys_ else "{}"
+    )
+    app.settings.campaign("fast").notes = "другие заметки"  # меняет config select
+    app.run_job(job.id, force_stage=StageName.select)
+    new = app.db.get_clip(job.id, clip.clip_id)
+    assert (new.start, new.end) != (clip.start, clip.end)
+    assert new.status == ClipStatus.pending_review and new.meta_override is None
