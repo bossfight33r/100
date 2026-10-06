@@ -65,11 +65,14 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 - [docs/campaigns.md](docs/campaigns.md) — кампании и аккаунты
 - [docs/decisions/](docs/decisions/) — ADR
 
+## Перенос на сервер
+
+Готово (ADR-0011):
+- **S3/MinIO** вместо локальной ФС: `CF_STORAGE=s3 CF_S3_BUCKET=... [CF_S3_ENDPOINT_URL=http://minio:9000]`, `uv pip install -e '.[s3]'`, ключи — стандартные `AWS_*`.
+- **NVENC** на GPU-сервере: выбирается автоматически, если реально кодирует (`cf capabilities` → «H.264 рабочие»).
+- **Ollama** вместо Anthropic: `CF_LLM_PROVIDER=ollama CF_OLLAMA_MODEL=qwen2.5:7b-instruct`.
+
 ## Дальше
 
-Не реализовано намеренно (только точки расширения через Protocol):
-- `storage/s3.py` — S3/MinIO-реализация `ObjectStorage` для выноса артефактов с машины.
-- `backends/encoder/nvenc.py` — NVENC-энкодер для GPU-сервера.
-- `backends/llm/ollama.py` — локальная LLM вместо Anthropic.
 - `compute/routing.py` — маршрутизация задач по `TaskRequirements`/`WorkerCapabilities` на удалённые воркеры.
 - PostgreSQL вместо SQLite (весь SQL изолирован в `db.py`).

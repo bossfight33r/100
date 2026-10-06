@@ -217,8 +217,8 @@ class PublishService:
             req = PublishRequest(
                 publication_id=pub.id,
                 account=accounts[pub.account_id],
-                video_path=self.app.storage.local_path(clip.video_key),
-                thumb_path=self.app.storage.local_path(clip.thumb_key) if clip.thumb_key else None,
+                video_path=self.app.materialize(clip.video_key),
+                thumb_path=self.app.materialize(clip.thumb_key) if clip.thumb_key else None,
                 meta=meta,
                 scheduled_at=pub.scheduled_at,
             )

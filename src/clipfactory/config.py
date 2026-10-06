@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     campaigns_dir: Path = Path("config/campaigns")
     accounts_file: Path = Path("config/accounts.yaml")
 
+    storage: Literal["local", "s3"] = "local"
+    s3_bucket: str | None = None
+    s3_prefix: str = ""
+    s3_endpoint_url: str | None = None  # MinIO и прочие S3-совместимые
+    s3_region: str | None = None
+
     transcriber: Literal["auto", "mlx", "faster_whisper", "fake"] = "auto"
     whisper_model: str = "large-v3-turbo"
     llm_provider: Literal["anthropic", "ollama", "fake"] = "anthropic"

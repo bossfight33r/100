@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -14,13 +15,17 @@ from clipfactory.backends.llm.base import LLMProvider
 from clipfactory.backends.transcriber.base import Transcriber
 from clipfactory.config import Settings
 from clipfactory.db import Database
+from clipfactory.log import get_logger
 from clipfactory.pipeline.context import Backends, StageContext
 from clipfactory.pipeline.ingest import is_url
 from clipfactory.pipeline.orchestrator import Orchestrator
 from clipfactory.queue.base import Queue
 from clipfactory.queue.inline import InlineQueue
 from clipfactory.schemas import Job, JobStatus, ReviewOverrides, StageName, utcnow
+from clipfactory.storage.base import ObjectStorage, SupportsLocalPath
 from clipfactory.storage.local import LocalStorage
+
+log = get_logger(__name__)
 
 
 class JobBusy(ValueError):
@@ -77,6 +82,21 @@ def build_encoder(settings: Settings) -> EncoderBackend:
     return select_encoder(settings.encoder, ffmpeg.list_encoders(), works=ffmpeg.encoder_works)
 
 
+def build_storage(settings: Settings) -> ObjectStorage:
+    if settings.storage == "s3":
+        from clipfactory.storage.s3 import S3Storage
+
+        if not settings.s3_bucket:
+            raise ValueError("CF_STORAGE=s3 requires CF_S3_BUCKET")
+        return S3Storage(
+            settings.s3_bucket,
+            prefix=settings.s3_prefix,
+            endpoint_url=settings.s3_endpoint_url,
+            region=settings.s3_region,
+        )
+    return LocalStorage(settings.data_dir)
+
+
 def backend_ids(settings: Settings) -> dict[str, str]:
     """Идентичность бэкендов из настроек — для config_hash без загрузки моделей."""
     from clipfactory.backends.transcriber.mlx import mlx_available
@@ -109,11 +129,11 @@ class App:
     llm_factory: Callable[[], LLMProvider] | None = None
     face_factory: Callable[[], FaceDetector] | None = None
     encoder_factory: Callable[[], EncoderBackend] | None = None
-    storage: LocalStorage = field(init=False)
+    storage: ObjectStorage = field(init=False)
     db: Database = field(init=False)
 
     def __post_init__(self) -> None:
-        self.storage = LocalStorage(self.settings.data_dir)
+        self.storage = build_storage(self.settings)
         self.db = Database(self.settings.db_path)
         self.db.sync_campaigns(self.settings.campaigns)
         self.db.sync_accounts(self.settings.accounts)
@@ -167,8 +187,47 @@ class App:
             # иначе job навсегда остаётся queued: Orchestrator ещё не начал писать статусы
             self.db.set_job_failed(job_id, None, type(e).__name__, str(e), False)
             raise
-        Orchestrator(self.db).run(ctx, force_stage=force_stage, no_cache=no_cache)
+        try:
+            Orchestrator(self.db).run(ctx, force_stage=force_stage, no_cache=no_cache)
+        finally:
+            if ctx._scratch is not None:  # копии из удалённого хранилища не копим
+                self._upload_logs(ctx._scratch, job_id)
+                shutil.rmtree(ctx._scratch, ignore_errors=True)
         return self.db.get_job(job_id)
+
+    def _upload_logs(self, scratch: Path, job_id: str) -> None:
+        """Логи ffmpeg из scratch -> хранилище (jobs/{id}/logs/*), чтобы пережили очистку."""
+        logs = scratch / "jobs" / job_id / "logs"
+        if not logs.is_dir():
+            return
+        for f in logs.glob("*.log"):
+            try:
+                self.storage.put_file(f"jobs/{job_id}/logs/{f.name}", f)
+            except Exception as e:  # лог не должен ронять job
+                log.warning("logs.upload_failed", job_id=job_id, error=str(e)[:200])
+
+    def location(self, key: str) -> str:
+        """Человекочитаемое место артефакта: путь на диске или s3://bucket/prefix/key."""
+        if isinstance(self.storage, SupportsLocalPath):
+            return str(self.storage.local_path(key))
+        prefix = f"{self.settings.s3_prefix.strip('/')}/" if self.settings.s3_prefix else ""
+        return f"s3://{self.settings.s3_bucket}/{prefix}{key}"
+
+    def materialize(self, key: str) -> Path:
+        """Локальный файл для артефакта (публикация, отправка в Telegram).
+
+        LocalStorage — прямой путь; иначе кеш в data_dir/cache/objects, перекачивается,
+        если sha256 объекта изменился.
+        """
+        if isinstance(self.storage, SupportsLocalPath):
+            return self.storage.local_path(key)
+        path = self.settings.data_dir / "cache" / "objects" / key
+        marker = path.with_name(path.name + ".sha256")
+        digest = self.storage.checksum(key)
+        if not (path.exists() and marker.exists() and marker.read_text() == digest):
+            self.storage.get_file(key, path)
+            marker.write_text(digest)
+        return path
 
     # ------------------------------------------------------------ queue
 
@@ -230,7 +289,7 @@ class App:
             "job": job.model_dump(mode="json"),
             "clips": [c.model_dump(mode="json") for c in clips],
             "stage_runs": self.db.stage_runs(job_id),
-            "dir": str(self.storage.local_path(f"jobs/{job_id}/source.mp4").parent),
+            "dir": self.location(f"jobs/{job_id}"),
         }
 
 

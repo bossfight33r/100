@@ -242,13 +242,13 @@ class BotController:
                 continue
             metas = self.review.effective_meta(job_id, clip.clip_id)
             thumb = (
-                self.app.storage.local_path(clip.thumb_key)
+                self.app.materialize(clip.thumb_key)
                 if clip.thumb_key and self.app.storage.exists(clip.thumb_key)
                 else None
             )
             out.append(
                 ClipCard(
-                    video_path=self.app.storage.local_path(clip.video_key),
+                    video_path=self.app.materialize(clip.video_key),
                     thumb_path=thumb,
                     caption=clip_caption(clip, metas),
                     keyboard=clip_kb(job_id, clip.clip_id),
