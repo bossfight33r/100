@@ -51,6 +51,10 @@ def build_llm(settings: Settings) -> LLMProvider:
         from clipfactory.backends.llm.fake import FakeLLM
 
         return FakeLLM()
+    if settings.llm_provider == "ollama":
+        from clipfactory.backends.llm.ollama import OllamaLLM
+
+        return OllamaLLM(settings.ollama_model, base_url=settings.ollama_url)
     from clipfactory.backends.llm.anthropic import AnthropicLLM
 
     key = settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else None
@@ -81,11 +85,11 @@ def backend_ids(settings: Settings) -> dict[str, str]:
     if tr == "auto":
         tr = "mlx" if mlx_available() else "faster_whisper"
     tr_model = "fake" if tr == "fake" else settings.whisper_model
-    llm = (
-        "fake"
-        if settings.llm_provider == "fake"
-        else f"anthropic/{settings.llm_model}/{settings.llm_effort}"
-    )
+    llm = {
+        "fake": "fake",
+        "ollama": f"ollama/{settings.ollama_model}",
+        "anthropic": f"anthropic/{settings.llm_model}/{settings.llm_effort}",
+    }[settings.llm_provider]
     face = (
         "fake" if settings.face_detector == "fake" else f"mediapipe/{settings.face_model_path.name}"
     )

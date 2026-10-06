@@ -28,9 +28,11 @@ class Settings(BaseSettings):
 
     transcriber: Literal["auto", "mlx", "faster_whisper", "fake"] = "auto"
     whisper_model: str = "large-v3-turbo"
-    llm_provider: Literal["anthropic", "fake"] = "anthropic"
+    llm_provider: Literal["anthropic", "ollama", "fake"] = "anthropic"
     llm_model: str = "claude-opus-5-5"
     llm_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    ollama_url: str = "http://localhost:11434"
+    ollama_model: str = "qwen2.5:7b-instruct"
     llm_max_tokens: int = 16000
     face_detector: Literal["mediapipe", "fake"] = "mediapipe"
     face_model_path: Path = Path("data/models/blaze_face_short_range.tflite")
