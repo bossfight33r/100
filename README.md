@@ -49,6 +49,7 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 | `cf track [--every 6h]` | собрать статистику YouTube (append-only снимки); `--every` — периодически |
 | `cf track --manual PUB_ID --views N [--likes --comments]` | ручной ввод для TikTok/Instagram |
 | `cf report [--campaign ID] [--recommendations]` | доход и статистика по кампаниям, аккаунтам, клипам, хукам; файл рекомендаций к промпту |
+| `cf serve [--port]` | локальный HTTP-API для десктоп-приложения (`CF_API_TOKEN`, только 127.0.0.1); схема — `docs/openapi.json`, ТЗ приложения — `docs/gui-spec.md` |
 | `cf bot` | Telegram-бот ревью (нужны `TELEGRAM_BOT_TOKEN`, `CF_ADMIN_IDS`) |
 | `cf review JOB_ID CLIP_ID approve\|reject\|edit\|captions\|crop` | ревью из терминала: `edit --title --description --hashtags [--platform]`, `crop --center 0–100\|auto`, `reject --reason` |
 

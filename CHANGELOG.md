@@ -1,5 +1,10 @@
 # Changelog
 
+## [API] Локальный HTTP-API и ТЗ десктоп-приложения
+
+- `api/app.py` (FastAPI): задачи, клипы и ревью, видео/обложки с Range, публикации, статистика, отчёт; только 127.0.0.1, Bearer-токен, access-лог выключен. `cf serve`.
+- `docs/openapi.json` и `docs/gui-spec.md` — ТЗ для SwiftUI-приложения (macOS, Apple Silicon): запуск ядра, экраны, дизайн, запреты, критерии приёмки.
+
 ## [LLM] Универсальный OpenAI-совместимый бэкенд
 
 - `backends/llm/openai_compat.py` (`CF_LLM_PROVIDER=openai_compat`): один код для OpenAI, DeepSeek, Gemini, OpenRouter, vLLM, LM Studio; без новых зависимостей; ключ из env и не попадает в ошибки; переключатели `CF_LLM_JSON_MODE`, `CF_LLM_TOKEN_PARAM`, `CF_LLM_TEMPERATURE`.

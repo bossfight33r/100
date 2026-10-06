@@ -383,6 +383,35 @@ def report(
 
 
 @app.command()
+def serve(
+    port: Annotated[int, typer.Option("--port", min=1, max=65535)] = 8765,
+    host: Annotated[
+        str, typer.Option("--host", help="Только 127.0.0.1, пока нет TLS")
+    ] = "127.0.0.1",
+) -> None:
+    """Локальный HTTP-API для десктоп-приложения (токен — CF_API_TOKEN, иначе генерируется)."""
+    import os
+    import secrets
+
+    import uvicorn
+
+    from clipfactory.api.app import create_app
+
+    token = os.environ.get("CF_API_TOKEN") or secrets.token_urlsafe(32)
+    generated = "CF_API_TOKEN" not in os.environ
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        typer.secho(
+            f"ВНИМАНИЕ: {host} открывает API по сети без TLS; токен пойдёт открытым текстом",
+            fg=typer.colors.YELLOW, err=True,
+        )  # fmt: skip
+    if generated:
+        typer.echo(f"CF_API_TOKEN={token}", err=True)  # единственный раз; клиент читает со stderr
+    uvicorn.run(
+        create_app(_app(), token), host=host, port=port, access_log=False, log_level="warning"
+    )
+
+
+@app.command()
 def bot() -> None:
     """Telegram-бот (control plane). Нужны TELEGRAM_BOT_TOKEN и CF_ADMIN_IDS."""
     from clipfactory.bot.main import BotConfigError, main
