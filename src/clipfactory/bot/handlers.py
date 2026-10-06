@@ -246,14 +246,10 @@ class BotController:
             except ObjectNotFound:
                 continue
             metas = self.review.effective_meta(job_id, clip.clip_id)
-            try:
-                thumb = self.app.materialize(clip.thumb_key) if clip.thumb_key else None
-            except ObjectNotFound:
-                thumb = None
             out.append(
                 ClipCard(
                     video_path=video,
-                    thumb_path=thumb,
+                    thumb_path=self.app.materialize_optional(clip.thumb_key),
                     caption=clip_caption(clip, metas),
                     keyboard=clip_kb(job_id, clip.clip_id),
                 )

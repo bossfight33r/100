@@ -218,18 +218,21 @@ class App:
 
     def _repoint_error_paths(self, scratch: Path, job_id: str) -> None:
         """В тексте ошибки путь к логу во временной папке -> место лога в хранилище."""
-        job = self.db.get_job(job_id)
-        prefix = str(scratch / "jobs" / job_id)
-        if (
-            job.status != JobStatus.failed
-            or not job.error_message
-            or prefix not in job.error_message
-        ):
-            return
-        message = job.error_message.replace(prefix, self.location(f"jobs/{job_id}"))
-        self.db.set_job_failed(
-            job_id, job.failed_stage, job.error_type or "error", message, bool(job.retryable)
-        )
+        try:
+            job = self.db.get_job(job_id)
+            prefix = str(scratch / "jobs" / job_id)
+            if (
+                job.status != JobStatus.failed
+                or not job.error_message
+                or prefix not in job.error_message
+            ):
+                return
+            message = job.error_message.replace(prefix, self.location(f"jobs/{job_id}"))
+            self.db.set_job_failed(
+                job_id, job.failed_stage, job.error_type or "error", message, bool(job.retryable)
+            )
+        except Exception as e:  # из finally: не подменять исходную ошибку и не мешать rmtree
+            log.warning("logs.repoint_failed", job_id=job_id, error=str(e)[:200])
 
     def location(self, key: str) -> str:
         """Человекочитаемое место артефакта: путь на диске или s3://bucket/prefix/key."""
@@ -256,6 +259,15 @@ class App:
             self.storage.get_file(key, path)
             marker.write_text(digest)
         return path
+
+    def materialize_optional(self, key: str | None) -> Path | None:
+        """``materialize`` для необязательного артефакта (обложка): нет объекта — None."""
+        if not key:
+            return None
+        try:
+            return self.materialize(key)
+        except ObjectNotFound:
+            return None
 
     # ------------------------------------------------------------ queue
 
@@ -294,13 +306,15 @@ class App:
         self._warn_if_no_worker(task.requirements)
         return task_id
 
-    def job_requirements(self, job_id: str) -> TaskRequirements:
+    def job_requirements(self, job: Job | str) -> TaskRequirements:
         """Требования job к воркеру — сохранены при создании (CF_JOB_REQUIRE_TAGS того, кто ставил).
 
         Не берём из настроек текущего процесса: воркер, восстанавливающий чужую GPU-job,
-        иначе отправил бы её в общую очередь.
+        иначе отправил бы её в общую очередь. Принимает уже загруженный Job или его id.
         """
-        return TaskRequirements(tags=self.db.get_job(job_id).require_tags)
+        if isinstance(job, str):
+            job = self.db.get_job(job)
+        return TaskRequirements(tags=job.require_tags)
 
     def _warn_if_no_worker(self, req: TaskRequirements) -> None:
         conn = getattr(self.queue, "connection", None)

@@ -218,7 +218,7 @@ class PublishService:
                 publication_id=pub.id,
                 account=accounts[pub.account_id],
                 video_path=self.app.materialize(clip.video_key),
-                thumb_path=self.app.materialize(clip.thumb_key) if clip.thumb_key else None,
+                thumb_path=self.app.materialize_optional(clip.thumb_key),
                 meta=meta,
                 scheduled_at=pub.scheduled_at,
             )

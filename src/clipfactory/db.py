@@ -224,6 +224,8 @@ class Database:
                 min_size=1,
                 max_size=8,
                 kwargs={"row_factory": dict_row, "connect_timeout": 30},
+                # простаивающее соединение могли закрыть (рестарт PG, idle timeout) — проверка
+                check=ConnectionPool.check_connection,
                 open=True,
                 name="clipfactory",
             )
@@ -234,6 +236,7 @@ class Database:
         if self._pool is not None:
             self._pool.close()
             self._pool = None
+            atexit.unregister(self.close)  # не держать закрытую Database до выхода
 
     @contextmanager
     def connect(self) -> Iterator[Any]:

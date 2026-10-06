@@ -69,7 +69,11 @@ def execute_task(task_data: dict[str, Any]) -> None:
     from clipfactory.config import Settings
     from clipfactory.services import App
 
-    dispatch(App(Settings()), Task.model_validate(task_data))
+    app = App(Settings())
+    try:
+        dispatch(app, Task.model_validate(task_data))
+    finally:
+        app.db.close()  # App на задачу: иначе каждая job оставляет открытый пул Postgres
 
 
 def recover(app: Any, queue: Queue) -> list[str]:
@@ -85,7 +89,7 @@ def recover(app: Any, queue: Queue) -> list[str]:
         if queue.status(task_id) in (TaskStatus.queued, TaskStatus.running):
             continue  # задача жива (мёртвые started-задачи RQ чистит cleanup() до recover)
         app.db.abandon_stage_runs(job.id)
-        queue.enqueue(make_run_task(job.id, requirements=app.job_requirements(job.id)))
+        queue.enqueue(make_run_task(job.id, requirements=app.job_requirements(job)))
         requeued.append(job.id)
         log.warning("worker.recovered_job", job_id=job.id, previous_status=job.status.value)
     return requeued

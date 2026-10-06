@@ -57,10 +57,12 @@ def publish_heartbeat(conn: Any, name: str, caps: WorkerCapabilities) -> None:
 
 
 def live_workers(conn: Any) -> dict[str, WorkerCapabilities]:
-    out = {}
-    for member in conn.smembers(REGISTRY_KEY):
-        name = member.decode() if isinstance(member, bytes) else member
-        raw = conn.get(HEARTBEAT_PREFIX + name)
+    out: dict[str, WorkerCapabilities] = {}
+    names = sorted(m.decode() if isinstance(m, bytes) else m for m in conn.smembers(REGISTRY_KEY))
+    if not names:
+        return out
+    # один MGET вместо GET на каждого воркера
+    for name, raw in zip(names, conn.mget([HEARTBEAT_PREFIX + n for n in names]), strict=True):
         if raw is None:  # heartbeat истёк — воркер мёртв, чистим реестр
             conn.srem(REGISTRY_KEY, name)
             continue
