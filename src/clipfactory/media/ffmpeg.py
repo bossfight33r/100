@@ -215,6 +215,20 @@ def parse_encoders(text: str) -> set[str]:
     return names
 
 
+@lru_cache(maxsize=16)
+def encoder_works(encoder: str) -> bool:
+    """Пробное кодирование 2 кадров: есть в списке != работает (nvenc без GPU и т.п.)."""
+    try:
+        ffmpeg(
+            ["-f", "lavfi", "-i", "color=s=256x256:r=30:d=0.1", "-frames:v", "2",
+             "-c:v", encoder, "-pix_fmt", "yuv420p", "-f", "null", "-"],
+            timeout=30,
+        )  # fmt: skip
+    except FFmpegError:
+        return False
+    return True
+
+
 @lru_cache(maxsize=1)
 def version() -> str:
     res = run("ffmpeg", ["-hide_banner", "-version"], timeout=30, capture_stdout=True)

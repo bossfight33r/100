@@ -22,6 +22,7 @@ class WorkerCapabilities(BaseModel):
     ffmpeg_version: str | None = None
     has_videotoolbox: bool
     available_encoders: list[str] = Field(default_factory=list)
+    working_encoders: list[str] = Field(default_factory=list)  # прошли пробное кодирование
     available_transcribers: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
 
@@ -35,7 +36,7 @@ class TaskRequirements(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-H264_ENCODERS = ("h264_videotoolbox", "libx264")
+H264_ENCODERS = ("h264_videotoolbox", "h264_nvenc", "libx264")
 
 
 def _ram_mb() -> int:
@@ -59,6 +60,7 @@ def detect_transcribers() -> list[str]:
 def detect() -> WorkerCapabilities:
     has_ffmpeg = shutil.which("ffmpeg") is not None
     encoders: list[str] = []
+    working: list[str] = []
     version = None
     if has_ffmpeg:
         all_enc = ffmpeg.list_encoders()
@@ -66,6 +68,7 @@ def detect() -> WorkerCapabilities:
             e for e in all_enc if "264" in e or "265" in e or "hevc" in e or e == "aac"
         )
         version = ffmpeg.version()
+        working = [e for e in H264_ENCODERS if e in all_enc and ffmpeg.encoder_works(e)]
     tags = [f"os:{platform.system().lower()}", f"arch:{platform.machine().lower()}"]
     return WorkerCapabilities(
         os=platform.system(),
@@ -75,8 +78,9 @@ def detect() -> WorkerCapabilities:
         has_ffmpeg=has_ffmpeg,
         has_ffprobe=shutil.which("ffprobe") is not None,
         ffmpeg_version=version,
-        has_videotoolbox="h264_videotoolbox" in encoders,
+        has_videotoolbox="h264_videotoolbox" in working,
         available_encoders=encoders,
+        working_encoders=working,
         available_transcribers=detect_transcribers(),
         tags=tags,
     )
@@ -91,9 +95,9 @@ def satisfies(caps: WorkerCapabilities, req: TaskRequirements) -> list[str]:
         if req.transcriber not in caps.available_transcribers:
             problems.append(f"transcriber {req.transcriber} unavailable")
     if req.encoder == "any_h264":
-        if not any(e in caps.available_encoders for e in H264_ENCODERS):
+        if not any(e in caps.working_encoders for e in H264_ENCODERS):
             problems.append("no H.264 encoder")
-    elif req.encoder and req.encoder not in caps.available_encoders:
+    elif req.encoder and req.encoder not in caps.working_encoders:
         problems.append(f"encoder {req.encoder} unavailable")
     missing_tags = set(req.tags) - set(caps.tags)
     if missing_tags:

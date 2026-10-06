@@ -62,6 +62,7 @@ def capabilities() -> None:
         f"ffprobe:       {'да' if caps.has_ffprobe else 'НЕТ'}",
         f"VideoToolbox:  {'да' if caps.has_videotoolbox else 'нет'}",
         f"Энкодеры:      {', '.join(caps.available_encoders) or '-'}",
+        f"H.264 рабочие: {', '.join(caps.working_encoders) or 'НЕТ'}",
         f"Транскриберы:  {', '.join(caps.available_transcribers)}",
         f"Теги:          {', '.join(caps.tags)}",
     ]

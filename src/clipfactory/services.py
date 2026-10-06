@@ -70,7 +70,7 @@ def build_face(settings: Settings) -> FaceDetector:
 def build_encoder(settings: Settings) -> EncoderBackend:
     from clipfactory.media import ffmpeg
 
-    return select_encoder(settings.encoder, ffmpeg.list_encoders())
+    return select_encoder(settings.encoder, ffmpeg.list_encoders(), works=ffmpeg.encoder_works)
 
 
 def backend_ids(settings: Settings) -> dict[str, str]:

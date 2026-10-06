@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 
@@ -20,23 +21,38 @@ class EncoderUnavailable(Exception):
 
 
 def select_encoder(
-    preference: str, available_encoders: frozenset[str] | set[str]
+    preference: str,
+    available_encoders: frozenset[str] | set[str],
+    works: Callable[[str], bool] = lambda name: True,
 ) -> EncoderBackend:
-    """Выбор по capability detection: videotoolbox только если реально есть в ffmpeg."""
+    """Выбор по capability detection: энкодер должен быть в ffmpeg И реально кодировать.
+
+    ``works`` — пробное кодирование (ffmpeg перечисляет h264_nvenc и без GPU).
+    auto: videotoolbox -> nvenc -> x264.
+    """
+    from clipfactory.backends.encoder.nvenc import NvencEncoder
     from clipfactory.backends.encoder.videotoolbox import VideoToolboxEncoder
     from clipfactory.backends.encoder.x264 import X264Encoder
 
-    vt, x264 = VideoToolboxEncoder(), X264Encoder()
-    if preference == "videotoolbox":
-        if vt.ffmpeg_encoder not in available_encoders:
-            raise EncoderUnavailable("h264_videotoolbox is not available in this ffmpeg build")
-        return vt
-    if preference == "x264":
-        if x264.ffmpeg_encoder not in available_encoders:
-            raise EncoderUnavailable("libx264 is not available in this ffmpeg build")
-        return x264
-    if vt.ffmpeg_encoder in available_encoders:
-        return vt
-    if x264.ffmpeg_encoder in available_encoders:
-        return x264
-    raise EncoderUnavailable("no H.264 encoder found (need libx264 or h264_videotoolbox)")
+    candidates: dict[str, EncoderBackend] = {
+        "videotoolbox": VideoToolboxEncoder(),
+        "nvenc": NvencEncoder(),
+        "x264": X264Encoder(),
+    }
+
+    def usable(enc: EncoderBackend) -> bool:
+        return enc.ffmpeg_encoder in available_encoders and works(enc.ffmpeg_encoder)
+
+    if preference != "auto":
+        enc = candidates.get(preference)
+        if enc is None:
+            raise EncoderUnavailable(f"unknown encoder {preference!r}")
+        if not usable(enc):
+            raise EncoderUnavailable(f"{enc.ffmpeg_encoder} is not usable on this machine")
+        return enc
+    for enc in candidates.values():
+        if usable(enc):
+            return enc
+    raise EncoderUnavailable(
+        "no working H.264 encoder (need libx264, h264_videotoolbox or h264_nvenc)"
+    )

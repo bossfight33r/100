@@ -116,7 +116,7 @@ def test_parse_scene_times():
 def test_requirements_matching():
     caps = WorkerCapabilities(
         os="Darwin", arch="arm64", cpu_threads=8, ram_mb=16000, has_ffmpeg=True,
-        has_ffprobe=True, has_videotoolbox=True, available_encoders=["h264_videotoolbox"],
+        has_ffprobe=True, has_videotoolbox=True, available_encoders=["h264_videotoolbox"], working_encoders=["h264_videotoolbox"],
         available_transcribers=["fake", "mlx"], tags=["os:darwin"],
     )  # fmt: skip
     assert satisfies(caps, TaskRequirements(transcriber="mlx", encoder="any_h264")) == []
@@ -142,3 +142,22 @@ def test_fonts_dir_with_special_chars_survives_filtergraph(tmp_path):
         cwd=tmp_path,
     )  # fmt: skip
     assert (tmp_path / "out.png").exists()
+
+
+def test_select_encoder_requires_working_encoder():
+    listed = {"libx264", "h264_nvenc"}
+    no_gpu = lambda name: name != "h264_nvenc"  # noqa: E731
+    assert select_encoder("auto", listed, works=no_gpu).name == "x264"
+    assert select_encoder("auto", listed).name == "nvenc"  # GPU есть -> nvenc раньше x264
+    with pytest.raises(EncoderUnavailable):
+        select_encoder("nvenc", listed, works=no_gpu)
+    with pytest.raises(EncoderUnavailable):
+        select_encoder("hevc_magic", listed)
+    args = select_encoder("nvenc", listed).video_args(fps=30)
+    assert args[:2] == ["-c:v", "h264_nvenc"] and "yuv420p" in args
+
+
+@needs_ffmpeg
+def test_encoder_works_probe():
+    assert ffmpeg.encoder_works("libx264") is True
+    assert ffmpeg.encoder_works("definitely_not_an_encoder") is False

@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 16000
     face_detector: Literal["mediapipe", "fake"] = "mediapipe"
     face_model_path: Path = Path("data/models/blaze_face_short_range.tflite")
-    encoder: Literal["auto", "videotoolbox", "x264"] = "auto"
+    encoder: Literal["auto", "videotoolbox", "nvenc", "x264"] = "auto"
 
     caption_font: str = "Arial"
     caption_fonts_dir: Path | None = None
