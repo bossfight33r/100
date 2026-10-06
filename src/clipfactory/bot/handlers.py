@@ -31,6 +31,7 @@ from clipfactory.log import get_logger
 from clipfactory.pipeline.ingest import is_url
 from clipfactory.pipeline.review import ReviewError, ReviewService
 from clipfactory.schemas import JobStatus
+from clipfactory.storage.base import ObjectNotFound
 
 log = get_logger(__name__)
 
@@ -238,17 +239,20 @@ class BotController:
         for clip in self.app.db.list_clips(job_id):
             if only and clip.clip_id not in only:
                 continue
-            if not clip.video_key or not self.app.storage.exists(clip.video_key):
+            if not clip.video_key:
+                continue
+            try:  # materialize сам проверяет наличие (один HEAD вместо exists + checksum)
+                video = self.app.materialize(clip.video_key)
+            except ObjectNotFound:
                 continue
             metas = self.review.effective_meta(job_id, clip.clip_id)
-            thumb = (
-                self.app.materialize(clip.thumb_key)
-                if clip.thumb_key and self.app.storage.exists(clip.thumb_key)
-                else None
-            )
+            try:
+                thumb = self.app.materialize(clip.thumb_key) if clip.thumb_key else None
+            except ObjectNotFound:
+                thumb = None
             out.append(
                 ClipCard(
-                    video_path=self.app.materialize(clip.video_key),
+                    video_path=video,
                     thumb_path=thumb,
                     caption=clip_caption(clip, metas),
                     keyboard=clip_kb(job_id, clip.clip_id),

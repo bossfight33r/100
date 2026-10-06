@@ -18,6 +18,7 @@ from clipfactory.compute.capabilities import TaskRequirements, WorkerCapabilitie
 
 BASE_QUEUE = "clipfactory"
 HEARTBEAT_PREFIX = "cf:worker:"
+REGISTRY_KEY = "cf:workers"  # множество имён: без SCAN по всему Redis
 HEARTBEAT_TTL = 60
 MAX_TAGS = 6  # 2^6 очередей на воркер — с запасом
 
@@ -52,15 +53,17 @@ def queues_for_worker(tags: list[str], base: str = BASE_QUEUE) -> list[str]:
 
 def publish_heartbeat(conn: Any, name: str, caps: WorkerCapabilities) -> None:
     conn.set(HEARTBEAT_PREFIX + name, caps.model_dump_json(), ex=HEARTBEAT_TTL)
+    conn.sadd(REGISTRY_KEY, name)
 
 
 def live_workers(conn: Any) -> dict[str, WorkerCapabilities]:
     out = {}
-    for key in conn.scan_iter(match=HEARTBEAT_PREFIX + "*"):
-        raw = conn.get(key)
-        if raw is None:
+    for member in conn.smembers(REGISTRY_KEY):
+        name = member.decode() if isinstance(member, bytes) else member
+        raw = conn.get(HEARTBEAT_PREFIX + name)
+        if raw is None:  # heartbeat истёк — воркер мёртв, чистим реестр
+            conn.srem(REGISTRY_KEY, name)
             continue
-        name = (key.decode() if isinstance(key, bytes) else key)[len(HEARTBEAT_PREFIX) :]
         try:
             out[name] = WorkerCapabilities.model_validate(json.loads(raw))
         except ValueError:
@@ -102,5 +105,6 @@ class Heartbeat:
         self._thread.join(timeout=5)
         try:
             self.conn.delete(HEARTBEAT_PREFIX + self.name)
+            self.conn.srem(REGISTRY_KEY, self.name)
         except Exception:  # noqa: S110
             pass

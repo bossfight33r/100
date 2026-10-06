@@ -29,7 +29,7 @@ class TranscribeStage:
         ffmpeg.ffmpeg(
             ["-i", str(src), "-vn", "-map", "0:a:0", "-ac", "1", "-ar", "16000",
              "-c:a", "pcm_s16le", "-map_metadata", "-1", "-bitexact", str(wav)],
-            log_path=ctx.local_path(ctx.log_key(self.name)),
+            log_path=ctx.log_path(self.name),
             cancel=ctx.cancel,
             timeout=ctx.settings.ffmpeg_timeout_sec,
         )  # fmt: skip

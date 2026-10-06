@@ -101,3 +101,23 @@ def test_settings_parse_tag_lists(monkeypatch, tmp_path):
     monkeypatch.setenv("CF_JOB_REQUIRE_TAGS", "gpu")
     s = Settings()
     assert s.worker_tags == ["eu", "gpu"] and s.job_require_tags == ["gpu"]
+
+
+def test_recover_keeps_original_job_requirements(tmp_path):
+    """Job поставлен с gpu; восстанавливает CPU-воркер без тегов — job остаётся в gpu-очереди."""
+    from clipfactory.queue.rq import RQQueue
+    from clipfactory.schemas import JobStatus
+    from clipfactory.worker import recover
+    from tests.helpers import make_fast_app
+
+    client = make_fast_app(tmp_path / "client", job_require_tags=["gpu"])
+    job = client.create_job(str(tmp_path / "v.mp4"), "fast")
+    assert client.db.get_job(job.id).require_tags == ["gpu"]
+
+    # «CPU-воркер» с той же БД, но без CF_JOB_REQUIRE_TAGS; job упал посреди render
+    worker_app = make_fast_app(tmp_path / "client")
+    worker_app.db.set_job_status(job.id, JobStatus.rendering)
+    q = RQQueue(connection=fakeredis.FakeStrictRedis())
+    assert recover(worker_app, q) == [job.id]
+    assert q.queue("clipfactory@gpu").job_ids == [f"run-{job.id}"]
+    assert q.rq_queue.count == 0

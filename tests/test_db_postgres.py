@@ -151,7 +151,9 @@ def test_init_is_idempotent(db):
     Database(target)
     with db.connect() as c:
         row = c.execute("SELECT version FROM schema_version").fetchone()
-    assert row["version"] == 2
+    from clipfactory.db import SCHEMA_VERSION
+
+    assert row["version"] == SCHEMA_VERSION
 
 
 def test_full_pipeline_on_postgres(pg_url, tmp_path):
@@ -170,3 +172,14 @@ def test_full_pipeline_on_postgres(pg_url, tmp_path):
     n = len(app.db.stage_runs(job.id))
     app.run_job(job.id)
     assert {r["cached"] for r in app.db.stage_runs(job.id)[n:]} == {1}
+
+
+def test_postgres_uses_connection_pool(pg_url):
+    db = Database(pg_url)
+    db.create_job(Job(id="j1", campaign_id="c", source="s"))
+    for _ in range(20):
+        db.get_job("j1")
+    stats = db._pool.get_stats()
+    assert stats["connections_num"] <= 2  # 21 запрос — одно-два соединения, а не 21
+    db.close()
+    db.close()  # идемпотентно

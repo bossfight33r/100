@@ -126,6 +126,16 @@ class StageContext:
     def log_key(self, stage: StageName | str, suffix: str = "") -> str:
         return self.key(f"logs/{stage}{suffix}.log")
 
+    def log_path(self, stage: StageName | str, suffix: str = "") -> Path:
+        """Куда ffmpeg пишет stderr. Старый лог не скачивается — он будет перезаписан."""
+        key = self.log_key(stage, suffix)
+        if isinstance(self.storage, SupportsLocalPath):
+            path = self.storage.local_path(key)
+        else:
+            path = self.scratch / key  # после прогона загружается в хранилище (App._upload_logs)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
     # ------------------------------------------------------------- local files
 
     @property

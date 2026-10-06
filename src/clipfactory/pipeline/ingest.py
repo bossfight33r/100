@@ -107,7 +107,7 @@ class IngestStage:
         if needs_remux(info):
             remuxed = True
             tmp = out_path.with_name(".source.remux.mp4")
-            log_path = ctx.local_path(ctx.log_key(self.name))
+            log_path = ctx.log_path(self.name)
             try:
                 ffmpeg.ffmpeg(
                     ["-i", str(fetched), "-map", "0:v:0", "-map", "0:a:0?",

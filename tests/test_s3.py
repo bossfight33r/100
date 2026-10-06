@@ -108,11 +108,15 @@ def test_ffmpeg_logs_survive_scratch_cleanup_on_s3(s3, tmp_path, monkeypatch):
         from clipfactory.media import ffmpeg
 
         ffmpeg.ffmpeg(["-i", "/nonexistent.mp4", "-f", "null", "-"],
-                      log_path=ctx.local_path(ctx.log_key("render", f"-{cand.id}")))  # fmt: skip
+                      log_path=ctx.log_path("render", f"-{cand.id}"))  # fmt: skip
 
     monkeypatch.setattr(RenderStage, "_render_clip", bad_render)
     with pytest.raises(JobFailed):
         app.run_job(job.id)
     keys = {o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET)["Contents"]}
     assert any(k.startswith(f"jobs/{job.id}/logs/render-") for k in keys)
-    assert app.db.get_job(job.id).error_type == "ffmpeg_error"
+    failed = app.db.get_job(job.id)
+    assert failed.error_type == "ffmpeg_error"
+    # путь к логу в ошибке ведёт в хранилище, а не в удалённую временную папку
+    assert f"s3://{BUCKET}/jobs/{job.id}/logs/render-" in failed.error_message
+    assert "/tmp/cf-" not in failed.error_message

@@ -23,7 +23,7 @@ from clipfactory.pipeline.orchestrator import Orchestrator
 from clipfactory.queue.base import Queue
 from clipfactory.queue.inline import InlineQueue
 from clipfactory.schemas import Job, JobStatus, ReviewOverrides, StageName, utcnow
-from clipfactory.storage.base import ObjectStorage, SupportsLocalPath
+from clipfactory.storage.base import ObjectNotFound, ObjectStorage, SupportsLocalPath
 from clipfactory.storage.local import LocalStorage
 
 log = get_logger(__name__)
@@ -158,7 +158,12 @@ class App:
         self.settings.campaign(campaign_id)  # валидация id
         if not is_url(source):
             source = str(Path(source).expanduser().resolve())
-        job = Job(id=new_job_id(), campaign_id=campaign_id, source=source)
+        job = Job(
+            id=new_job_id(),
+            campaign_id=campaign_id,
+            source=source,
+            require_tags=list(self.settings.job_require_tags),
+        )
         return self.db.create_job(job)
 
     def overrides_key(self, job_id: str) -> str:
@@ -196,6 +201,7 @@ class App:
         finally:
             if ctx._scratch is not None:  # копии из удалённого хранилища не копим
                 self._upload_logs(ctx._scratch, job_id)
+                self._repoint_error_paths(ctx._scratch, job_id)
                 shutil.rmtree(ctx._scratch, ignore_errors=True)
         return self.db.get_job(job_id)
 
@@ -209,6 +215,21 @@ class App:
                 self.storage.put_file(f"jobs/{job_id}/logs/{f.name}", f)
             except Exception as e:  # лог не должен ронять job
                 log.warning("logs.upload_failed", job_id=job_id, error=str(e)[:200])
+
+    def _repoint_error_paths(self, scratch: Path, job_id: str) -> None:
+        """В тексте ошибки путь к логу во временной папке -> место лога в хранилище."""
+        job = self.db.get_job(job_id)
+        prefix = str(scratch / "jobs" / job_id)
+        if (
+            job.status != JobStatus.failed
+            or not job.error_message
+            or prefix not in job.error_message
+        ):
+            return
+        message = job.error_message.replace(prefix, self.location(f"jobs/{job_id}"))
+        self.db.set_job_failed(
+            job_id, job.failed_stage, job.error_type or "error", message, bool(job.retryable)
+        )
 
     def location(self, key: str) -> str:
         """Человекочитаемое место артефакта: путь на диске или s3://bucket/prefix/key."""
@@ -224,7 +245,10 @@ class App:
         если sha256 объекта изменился.
         """
         if isinstance(self.storage, SupportsLocalPath):
-            return self.storage.local_path(key)
+            local = self.storage.local_path(key)
+            if not local.is_file():
+                raise ObjectNotFound(key)
+            return local
         path = self.settings.data_dir / "cache" / "objects" / key
         marker = path.with_name(path.name + ".sha256")
         digest = self.storage.checksum(key)
@@ -264,15 +288,19 @@ class App:
             job_id,
             force_stage=force_stage.value if force_stage else None,
             no_cache=no_cache,
-            requirements=self.job_requirements(),
+            requirements=self.job_requirements(job_id),
         )
         task_id = self.queue.enqueue(task)
         self._warn_if_no_worker(task.requirements)
         return task_id
 
-    def job_requirements(self) -> TaskRequirements:
-        """Требования job к воркеру (CF_JOB_REQUIRE_TAGS, например gpu или mac)."""
-        return TaskRequirements(tags=list(self.settings.job_require_tags))
+    def job_requirements(self, job_id: str) -> TaskRequirements:
+        """Требования job к воркеру — сохранены при создании (CF_JOB_REQUIRE_TAGS того, кто ставил).
+
+        Не берём из настроек текущего процесса: воркер, восстанавливающий чужую GPU-job,
+        иначе отправил бы её в общую очередь.
+        """
+        return TaskRequirements(tags=self.db.get_job(job_id).require_tags)
 
     def _warn_if_no_worker(self, req: TaskRequirements) -> None:
         conn = getattr(self.queue, "connection", None)

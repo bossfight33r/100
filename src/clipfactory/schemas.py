@@ -287,6 +287,7 @@ class Job(_Model):
     error_type: str | None = None
     error_message: str | None = None
     retryable: bool | None = None
+    require_tags: list[str] = Field(default_factory=list)  # к воркеру (маршрутизация)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 

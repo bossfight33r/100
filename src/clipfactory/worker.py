@@ -85,7 +85,7 @@ def recover(app: Any, queue: Queue) -> list[str]:
         if queue.status(task_id) in (TaskStatus.queued, TaskStatus.running):
             continue  # задача жива (мёртвые started-задачи RQ чистит cleanup() до recover)
         app.db.abandon_stage_runs(job.id)
-        queue.enqueue(make_run_task(job.id, requirements=app.job_requirements()))
+        queue.enqueue(make_run_task(job.id, requirements=app.job_requirements(job.id)))
         requeued.append(job.id)
         log.warning("worker.recovered_job", job_id=job.id, previous_status=job.status.value)
     return requeued

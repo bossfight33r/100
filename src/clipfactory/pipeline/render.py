@@ -270,7 +270,7 @@ class RenderStage:
         )
         video_key = ctx.clip_key(cand.id, "final.mp4")
         tmp_video = clip_dir / ".final.tmp.mp4"
-        log_path = ctx.local_path(ctx.log_key(self.name, f"-{cand.id}"))
+        log_path = ctx.log_path(self.name, f"-{cand.id}")
         ffmpeg.ffmpeg(
             render_args(
                 source=str(src), cand=cand, plan=plan,

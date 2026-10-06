@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import sqlite3
 from collections.abc import Iterator, Sequence
@@ -30,11 +31,12 @@ from clipfactory.schemas import (
     utcnow,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Миграции применяются по порядку к базе с меньшей версией (SCHEMA — это версия 1).
 MIGRATIONS: dict[int, list[str]] = {
     2: ["ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0"],
+    3: ["ALTER TABLE jobs ADD COLUMN require_tags TEXT NOT NULL DEFAULT ''"],
 }
 
 SCHEMA = """
@@ -204,6 +206,7 @@ class Database:
 
     def __init__(self, target: Path | str) -> None:
         self.postgres = is_postgres_url(target)
+        self._pool: Any = None
         if self.postgres:
             self.url = str(target)
         else:
@@ -211,13 +214,32 @@ class Database:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self.init()
 
+    def _pg_pool(self) -> Any:
+        if self._pool is None:
+            from psycopg.rows import dict_row
+            from psycopg_pool import ConnectionPool
+
+            self._pool = ConnectionPool(
+                self.url,
+                min_size=1,
+                max_size=8,
+                kwargs={"row_factory": dict_row, "connect_timeout": 30},
+                open=True,
+                name="clipfactory",
+            )
+            atexit.register(self.close)
+        return self._pool
+
+    def close(self) -> None:
+        if self._pool is not None:
+            self._pool.close()
+            self._pool = None
+
     @contextmanager
     def connect(self) -> Iterator[Any]:
         if self.postgres:
-            import psycopg
-            from psycopg.rows import dict_row
-
-            with psycopg.connect(self.url, row_factory=dict_row, connect_timeout=30) as pg:
+            # пул: соединение не открывается заново на каждый вызов (воркер делает их десятки)
+            with self._pg_pool().connection() as pg:
                 yield _PgConnection(pg)  # выход из with — commit, исключение — rollback
             return
         conn = sqlite3.connect(self.path, timeout=30)
@@ -279,10 +301,11 @@ class Database:
     def create_job(self, job: Job) -> Job:
         with self.connect() as c:
             c.execute(
-                "INSERT INTO jobs(id, campaign_id, source, status, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?)",
+                "INSERT INTO jobs(id, campaign_id, source, status, require_tags, created_at, "
+                "updated_at) VALUES (?,?,?,?,?,?,?)",
                 (job.id, job.campaign_id, job.source, job.status.value,
-                 _ts(job.created_at), _ts(job.updated_at)),
+                 ",".join(sorted(set(job.require_tags))), _ts(job.created_at),
+                 _ts(job.updated_at)),
             )  # fmt: skip
         return job
 
@@ -296,6 +319,7 @@ class Database:
             error_type=row["error_type"],
             error_message=row["error_message"],
             retryable=None if row["retryable"] is None else bool(row["retryable"]),
+            require_tags=[t for t in (row["require_tags"] or "").split(",") if t],
             created_at=_dt(row["created_at"]),
             updated_at=_dt(row["updated_at"]),
         )
