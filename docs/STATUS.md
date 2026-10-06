@@ -37,6 +37,10 @@
 - Загрузка дольше 30 мин в другом процессе может быть ошибочно признана прерванной при параллельном `cf publish` (для shorts нереалистично; см. `PUBLISHING_LEASE`).
 - Отмена не прерывает вызов Whisper/LLM посередине — срабатывает сразу после него.
 
+## Облачные сессии
+
+`.claude/hooks/session-start.sh` (SessionStart, синхронный): ffmpeg, libegl1/libgles2, uv venv на Python 3.12, `pip install -e .[dev]`, модель лиц. После него сразу работают `make lint` и `make test`.
+
 ## Блокеры
 
 Нет.

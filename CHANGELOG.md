@@ -9,6 +9,8 @@
 - `cf review` с edit/captions/crop, `cf publish --retry-failed`, `cf track --every`.
 - Тесты адаптеров faster-whisper/mlx/Anthropic/YouTube на настоящих типах библиотек.
 - Второй проход code review: 10 находок закрыто — восстановление прерванной загрузки (было недостижимо), лиза 30 мин для `publishing`, гонка миграций (`BEGIN IMMEDIATE`), мгновенная проверка отмены и верный `failed_stage`, устойчивый `cf track --every`, `/cancel` вне event loop, проверка занятости job до перерендера, уточнено правило 6 в CLAUDE.md.
+- Security review всей ветки: HIGH/MEDIUM не найдено; усилено — редактирование токена бота в URL Bot API, отказ от плейлистов (hls/concat) как источника.
+- SessionStart-хук для облачных сессий; проверено: чистый клон → `make setup` → lint → 141 тест зелёные.
 - Локальный Telegram Bot API server (`CF_TELEGRAM_API_URL`) — файлы до 2 ГБ.
 
 ## [Фаза 5] Tracking + earnings
