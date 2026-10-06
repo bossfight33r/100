@@ -22,6 +22,7 @@ from clipfactory.storage.local import sha256_file
 
 log = get_logger(__name__)
 
+PLAYLIST_FORMATS = {"hls", "applehttp", "concat", "ffconcat", "dash"}
 DIRECT_MEDIA_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 MP4_FAMILY = {"mov", "mp4", "m4a", "3gp", "3g2", "mj2"}
 MP4_VIDEO_CODECS = {"h264", "hevc", "av1", "mpeg4"}
@@ -94,6 +95,9 @@ class IngestStage:
             info = probe(fetched)
         except ProbeError as e:
             raise SourceError(f"source is not a readable media file: {e}") from e
+        if set(info.format_name.split(",")) & PLAYLIST_FORMATS:
+            # плейлист вместо медиа: ffmpeg читал бы файлы/URL из его содержимого
+            raise SourceError(f"playlist sources are not allowed ({info.format_name})")
         if info.video is None:
             raise SourceError("source has no video stream")
 

@@ -18,3 +18,11 @@ def test_redacts_secret_keys_and_values():
 
 def test_redact_text_google_token():
     assert "ya29" not in redact_text("token=ya29.a0AfH6SMB-xyz")
+
+
+def test_redacts_telegram_token_inside_bot_api_url():
+    url = (
+        "https://api.telegram.org/file/bot123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/videos/x.mp4"
+    )
+    out = redact_text(f"download failed: {url}")
+    assert "AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw" not in out and "123456789:" not in out

@@ -114,3 +114,14 @@ def test_download_error_becomes_retryable_source_error(tmp_path):
     with pytest.raises(SourceError) as ei:
         stage.run(_ctx(tmp_path, "https://cdn.example.com/v.mp4"))
     assert ei.value.retryable is True
+
+
+@needs_ffmpeg
+def test_ingest_rejects_playlist_disguised_as_media(tmp_path):
+    seg = tmp_path / "seg.ts"
+    ffmpeg.ffmpeg(["-f", "lavfi", "-i", "testsrc2=d=1:s=160x120", "-c:v", "libx264",
+                   "-f", "mpegts", str(seg)])  # fmt: skip
+    evil = tmp_path / "evil.mp4"
+    evil.write_text("ffconcat version 1.0\nfile seg.ts\n", encoding="utf-8")
+    with pytest.raises(SourceError, match="playlist"):
+        IngestStage().run(_ctx(tmp_path / "w", str(evil)))

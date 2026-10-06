@@ -14,7 +14,8 @@ _SECRET_KEYS = re.compile(
 )
 _SECRET_VALUES = [
     re.compile(r"sk-ant-[A-Za-z0-9_\-]+"),
-    re.compile(r"\b\d{6,12}:[A-Za-z0-9_\-]{30,}\b"),  # telegram bot token
+    # telegram bot token, в т.ч. внутри URL Bot API (.../bot123456:AAH.../...)
+    re.compile(r"(?<![A-Za-z0-9])(?:bot)?\d{6,12}:[A-Za-z0-9_\-]{30,}"),
     re.compile(r"ya29\.[A-Za-z0-9_\-\.]+"),  # google access token
     re.compile(r"(?i)bearer\s+[A-Za-z0-9_\-\.=]+"),
 ]
