@@ -34,9 +34,17 @@ class Settings(BaseSettings):
 
     transcriber: Literal["auto", "mlx", "faster_whisper", "fake"] = "auto"
     whisper_model: str = "large-v3-turbo"
-    llm_provider: Literal["anthropic", "ollama", "fake"] = "anthropic"
+    llm_provider: Literal["anthropic", "openai_compat", "ollama", "fake"] = "anthropic"
     llm_model: str = "claude-opus-5-5"
     llm_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    # openai_compat: любой OpenAI-совместимый API (OpenAI, DeepSeek, Gemini, OpenRouter, vLLM...)
+    llm_base_url: str | None = None
+    llm_api_key: SecretStr | None = None  # CF_LLM_API_KEY; только из env
+    llm_json_mode: bool = (
+        True  # response_format=json_object (если провайдер не поддерживает — false)
+    )
+    llm_token_param: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
+    llm_temperature: float | None = 0.2  # CF_LLM_TEMPERATURE=-1 — не отправлять (o-серия)
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5:7b-instruct"
     ollama_num_ctx: int = 16384  # окно контекста; дефолт Ollama (2–4K) молча режет транскрипт
@@ -73,6 +81,11 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr | None = Field(
         default=None, validation_alias="TELEGRAM_BOT_TOKEN"
     )
+
+    @field_validator("llm_temperature", mode="after")
+    @classmethod
+    def _temperature(cls, v: float | None) -> float | None:
+        return None if v is not None and v < 0 else v
 
     @field_validator("worker_tags", "job_require_tags", mode="before")
     @classmethod

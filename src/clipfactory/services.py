@@ -63,6 +63,20 @@ def build_llm(settings: Settings) -> LLMProvider:
         return OllamaLLM(
             settings.ollama_model, base_url=settings.ollama_url, num_ctx=settings.ollama_num_ctx
         )
+    if settings.llm_provider == "openai_compat":
+        from clipfactory.backends.llm.openai_compat import OpenAICompatLLM
+
+        if not settings.llm_base_url:
+            raise ValueError("CF_LLM_PROVIDER=openai_compat requires CF_LLM_BASE_URL")
+        key = settings.llm_api_key.get_secret_value() if settings.llm_api_key else None
+        return OpenAICompatLLM(
+            settings.llm_model,
+            base_url=settings.llm_base_url,
+            api_key=key,
+            temperature=settings.llm_temperature,
+            json_mode=settings.llm_json_mode,
+            token_param=settings.llm_token_param,
+        )
     from clipfactory.backends.llm.anthropic import AnthropicLLM
 
     key = settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else None
@@ -112,6 +126,7 @@ def backend_ids(settings: Settings) -> dict[str, str]:
     llm = {
         "fake": "fake",
         "ollama": f"ollama/{settings.ollama_model}",
+        "openai_compat": f"openai_compat/{settings.llm_base_url}/{settings.llm_model}",
         "anthropic": f"anthropic/{settings.llm_model}/{settings.llm_effort}",
     }[settings.llm_provider]
     face = (

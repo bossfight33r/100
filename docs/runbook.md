@@ -49,6 +49,27 @@ CF_JOB_REQUIRE_TAGS=gpu .venv/bin/cf enqueue video.mp4 -c example
 - `queue.no_eligible_worker` в логе при постановке — нет живого воркера с нужными тегами (heartbeat 60 с); задача ждёт в своей очереди.
 - Воркер слушает `clipfactory@<теги>` для всех подмножеств своих тегов и `clipfactory`.
 
+## Другая LLM вместо Claude (OpenAI-совместимый API)
+
+Один бэкенд (`CF_LLM_PROVIDER=openai_compat`) для любого провайдера с `/chat/completions`. Меняются три переменные; ключ — только в `.env`:
+
+```bash
+# DeepSeek
+CF_LLM_PROVIDER=openai_compat CF_LLM_BASE_URL=https://api.deepseek.com/v1 CF_LLM_MODEL=<модель из консоли DeepSeek> CF_LLM_API_KEY=...
+# Gemini (OpenAI-совместимый режим)
+CF_LLM_PROVIDER=openai_compat CF_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai CF_LLM_MODEL=<модель> CF_LLM_API_KEY=...
+# OpenAI
+CF_LLM_PROVIDER=openai_compat CF_LLM_BASE_URL=https://api.openai.com/v1 CF_LLM_MODEL=<модель> CF_LLM_API_KEY=...
+# локальный vLLM / LM Studio (ключ не нужен)
+CF_LLM_PROVIDER=openai_compat CF_LLM_BASE_URL=http://localhost:1234/v1 CF_LLM_MODEL=<имя модели>
+```
+
+Названия моделей и цены сверяй на сайте провайдера — они меняются. Нюансы:
+- Ошибка про `response_format` → `CF_LLM_JSON_MODE=false` (промпт и так требует JSON, парсер снимает ```-ограждения и повторяет запрос до 3 раз).
+- Ошибка про `max_tokens` (новые модели OpenAI) → `CF_LLM_TOKEN_PARAM=max_completion_tokens`.
+- Ошибка про `temperature` → `CF_LLM_TEMPERATURE=-1` (параметр не отправляется).
+- Смена модели меняет `config_hash` этапа select: он пересчитается, остальные этапы возьмутся из кеша.
+
 ## Telegram-бот
 
 ```bash

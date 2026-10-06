@@ -1,5 +1,9 @@
 # Changelog
 
+## [LLM] Универсальный OpenAI-совместимый бэкенд
+
+- `backends/llm/openai_compat.py` (`CF_LLM_PROVIDER=openai_compat`): один код для OpenAI, DeepSeek, Gemini, OpenRouter, vLLM, LM Studio; без новых зависимостей; ключ из env и не попадает в ошибки; переключатели `CF_LLM_JSON_MODE`, `CF_LLM_TOKEN_PARAM`, `CF_LLM_TEMPERATURE`.
+
 ## [Перенос на сервер] S3, NVENC, Ollama, маршрутизация, PostgreSQL
 
 - `storage/s3.py` — S3/MinIO (`CF_STORAGE=s3`), sha256 в метаданных объекта, `App.materialize`, логи ffmpeg загружаются в хранилище, путь к логу в ошибке ведёт туда (ADR-0011).
