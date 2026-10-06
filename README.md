@@ -73,6 +73,4 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 - **Ollama** вместо Anthropic: `CF_LLM_PROVIDER=ollama CF_OLLAMA_MODEL=qwen2.5:7b-instruct`.
 - **Маршрутизация на воркеры** (ADR-0012): `CF_JOB_REQUIRE_TAGS=gpu` при постановке — задачу возьмёт только воркер с тегом `gpu` (NVENC реально кодирует или `CF_WORKER_TAGS=gpu`).
 
-## Дальше
-
-- PostgreSQL вместо SQLite для нескольких машин без общего диска (весь SQL изолирован в `db.py`).
+- **PostgreSQL** вместо SQLite (ADR-0013): `CF_DB_URL=postgresql://user:pass@host/clipfactory`, `uv pip install -e '.[postgres]'`. Схема и миграции создаются сами.

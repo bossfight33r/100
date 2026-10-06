@@ -1,0 +1,9 @@
+# ADR-0013: PostgreSQL как второй диалект Database
+
+**Решение.** `Database(target)`: путь — SQLite, `postgresql://...` — PostgreSQL (psycopg 3). Публичный API не меняется. Для PG: соединение-обёртка переводит `?` в `%s` и отдаёт строки словарями; схема строится из той же SQLite-схемы (identity вместо AUTOINCREMENT, DOUBLE PRECISION, append-only триггер на PL/pgSQL); общий механизм миграций; `pg_advisory_xact_lock` вместо `BEGIN IMMEDIATE`. `INSERT ... RETURNING id` в обоих диалектах. Время по-прежнему ISO-8601 TEXT — одинаковые сравнения и сериализация.
+
+**Почему.** Несколько машин (Мак + GPU-сервер) без общего диска: SQLite по сети ненадёжен. SQL уже был изолирован в `db.py`.
+
+**Проверка.** `tests/test_db_postgres.py` — контракт на обоих диалектах и полный pipeline на настоящем PostgreSQL 16 (локальный кластер, только unix-сокет).
+
+**Отброшено.** SQLAlchemy/ORM (переписывание слоя ради двух диалектов), нативные timestamptz (разошлась бы сериализация между диалектами).

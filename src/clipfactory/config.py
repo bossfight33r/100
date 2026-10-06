@@ -89,6 +89,13 @@ class Settings(BaseSettings):
             return [v]
         return v
 
+    # PostgreSQL для нескольких машин: postgresql://user:pass@host/db (иначе SQLite в data_dir)
+    db_url: str | None = None
+
+    @property
+    def db_target(self) -> Path | str:
+        return self.db_url or self.db_path
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "db" / "clipfactory.sqlite3"

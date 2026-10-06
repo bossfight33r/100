@@ -135,7 +135,7 @@ class App:
 
     def __post_init__(self) -> None:
         self.storage = build_storage(self.settings)
-        self.db = Database(self.settings.db_path)
+        self.db = Database(self.settings.db_target)
         self.db.sync_campaigns(self.settings.campaigns)
         self.db.sync_accounts(self.settings.accounts)
 
