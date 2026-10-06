@@ -132,6 +132,13 @@ class ReviewService:
         )  # fmt: skip
         return updated
 
+    def _require_rerenderable(self, job_id: str, clip_id: str) -> None:
+        """Проверить всё до изменений: иначе JobBusy оставил бы полуприменённую правку."""
+        self._require_status(job_id, RERENDERABLE)
+        self._clip(job_id, clip_id)
+        if self.app.job_busy(job_id):
+            raise ReviewError(f"job {job_id} is already queued or running; try again later")
+
     def _save_overrides(self, job_id: str, overrides: ReviewOverrides) -> None:
         self.app.storage.put_bytes(
             self.app.overrides_key(job_id), overrides.model_dump_json(indent=2).encode()
@@ -141,8 +148,7 @@ class ReviewService:
         self, job_id: str, clip_id: str, actor: str = "cli", *, run: bool = True
     ) -> StageName:
         """Подготовить перерендер субтитров; run=False — запуск job оставить вызывающему."""
-        self._require_status(job_id, RERENDERABLE)
-        self._clip(job_id, clip_id)
+        self._require_rerenderable(job_id, clip_id)
         ov = self.app.load_overrides(job_id)
         ov.caption_nonce[clip_id] = ov.caption_nonce.get(clip_id, 0) + 1
         self._save_overrides(job_id, ov)
@@ -162,8 +168,7 @@ class ReviewService:
         run: bool = True,
     ) -> StageName:
         """center_x 0..1 — ручной центр кропа; None — снять ручную правку и пересчитать."""
-        self._require_status(job_id, RERENDERABLE)
-        self._clip(job_id, clip_id)
+        self._require_rerenderable(job_id, clip_id)
         if center_x is not None and not 0.0 <= center_x <= 1.0:
             raise ReviewError("center_x must be between 0 and 1")
         ov = self.app.load_overrides(job_id)

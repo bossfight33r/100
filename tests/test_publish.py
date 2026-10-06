@@ -199,10 +199,22 @@ def test_interrupted_upload_not_retried_automatically(tmp_path):
     ReviewService(app).approve(job.id, clip.clip_id)
     svc, yt = service(app)
     [yt_pub, _] = sorted(svc.schedule_job(job.id), key=lambda p: p.platform.value != "youtube")
-    # процесс упал посреди загрузки
+    # процесс упал посреди загрузки: и публикация, и job остались в publishing
     yt_pub.status = PublicationStatus.publishing
     app.db.save_publication(yt_pub)
+    app.db.set_job_status(job.id, JobStatus.publishing)
 
+    # свежая запись — возможно, загрузка идёт в другом процессе: не трогаем
+    svc.schedule_job(job.id)  # `cf publish` после падения не должен отказывать
+    svc.publish_job(job.id)
+    assert app.db.get_publication(yt_pub.id).status == PublicationStatus.publishing
+    assert yt.inserts == []
+    # лиза истекла (запись не обновлялась > 30 мин) — считаем загрузку прерванной
+    with app.db.connect() as c:
+        c.execute(
+            "UPDATE publications SET updated_at=? WHERE id=?",
+            ((datetime.now(UTC) - timedelta(hours=1)).isoformat(), yt_pub.id),
+        )
     svc.publish_job(job.id)
     stuck = app.db.get_publication(yt_pub.id)
     assert stuck.status == PublicationStatus.failed and "interrupted" in stuck.error

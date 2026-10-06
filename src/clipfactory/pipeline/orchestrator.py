@@ -57,13 +57,16 @@ class CancelWatcher:
         self._thread = threading.Thread(target=self._loop, name=f"cancel-{job_id}", daemon=True)
 
     def _loop(self) -> None:
-        while not self._stop.wait(self.interval):
+        # первая проверка сразу: отмена, запрошенная до старта, не даёт начать этап
+        while True:
             try:
                 if self.db.cancel_requested(self.job_id):
                     self.event.set()
                     return
             except Exception as e:  # DB временно недоступна — не роняем pipeline
                 log.debug("cancel_watcher.error", error=str(e))
+            if self._stop.wait(self.interval):
+                return
 
     def __enter__(self) -> CancelWatcher:
         self._thread.start()
@@ -201,9 +204,9 @@ class Orchestrator:
         try:
             with CancelWatcher(self.db, job_id, ctx.cancel):
                 for stage in self.stages:
+                    current = stage.name
                     if ctx.cancel.is_set():
                         raise JobCancelled("cancelled by user")
-                    current = stage.name
                     forced = forced or no_cache or stage.name == force_stage
                     self.db.set_job_status(job_id, STAGE_STATUS[stage.name])
                     cfg_hash = config_hash(stage.config(ctx))

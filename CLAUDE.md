@@ -7,7 +7,7 @@
 3. Данные между этапами — только через `src/clipfactory/schemas.py`.
 4. Внешние сервисы (LLM, Whisper, YouTube, Telegram) — только через `backends/`, `publish/`, `bot/`.
 5. ffmpeg/ffprobe — только через `src/clipfactory/media/ffmpeg.py`.
-6. Этапы идемпотентны; кеш — только через манифест (hashes + stage_version + config_hash), не через `exists()`.
+6. Этапы идемпотентны; кеш — только через манифест (hashes + stage_version + config_hash) или клиповый сайдкар `clipcache` (отпечаток входов + sha256 выходов, ADR-0010); `exists()` сам по себе — никогда не критерий кеша.
 7. Работающие модули не переписывать без необходимости; изменение архитектуры — через ADR в `docs/decisions/`.
 8. В тестах никаких реальных API (YouTube, Telegram, Anthropic, Redis, интернет).
 9. Бот обслуживает только `ADMIN_IDS`.

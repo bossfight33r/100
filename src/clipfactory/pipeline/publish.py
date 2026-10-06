@@ -7,7 +7,7 @@ Rejected и не прошедшие ревью клипы не публикую�
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from clipfactory.log import get_logger
@@ -21,6 +21,7 @@ from clipfactory.schemas import (
     Platform,
     Publication,
     PublicationStatus,
+    utcnow,
 )
 
 log = get_logger(__name__)
@@ -29,6 +30,7 @@ ACTIVE_PUB = [PublicationStatus.scheduled, PublicationStatus.publishing, Publica
               PublicationStatus.exported]  # fmt: skip
 
 
+PUBLISHING_LEASE = timedelta(minutes=30)  # дольше короткий клип не грузится
 INTERRUPTED = (
     "upload was interrupted; check the channel for a duplicate, then "
     "`cf publish JOB_ID --retry-failed` to upload again"
@@ -92,7 +94,12 @@ class PublishService:
     def schedule_job(self, job_id: str) -> list[Publication]:
         """Распределить одобренные клипы по слотам аккаунтов кампании. Идемпотентно."""
         job = self.db.get_job(job_id)
-        if job.status not in (JobStatus.awaiting_review, JobStatus.scheduled, JobStatus.published):
+        # publishing — процесс упал посреди загрузки; publish_job разберёт зависшие публикации
+        allowed = (
+            JobStatus.awaiting_review, JobStatus.scheduled, JobStatus.publishing,
+            JobStatus.published,
+        )  # fmt: skip
+        if job.status not in allowed:
             raise PublishServiceError(f"job {job_id} is {job.status.value}; review it first")
         clips = [c for c in self.db.list_clips(job_id) if c.status == ClipStatus.approved]
         if not clips:
@@ -143,11 +150,14 @@ class PublishService:
         Повторять автоматически нельзя: загрузка могла завершиться на стороне платформы,
         и повтор создал бы дубль. Повтор — явно, через ``retry_failed`` после проверки.
         """
-        stuck = self.db.list_publications(job_id=job_id, statuses=[PublicationStatus.publishing])
+        # лиза: живая загрузка в другом процессе обновлялась недавно — её не трогаем
+        stuck = self.db.stale_publishing(job_id, older_than=utcnow() - PUBLISHING_LEASE)
         for pub in stuck:
             pub.status, pub.error = PublicationStatus.failed, INTERRUPTED
             self.db.save_publication(pub)
             log.error("publish.interrupted", publication_id=pub.id)
+        if stuck:
+            self._refresh_job_status(job_id)
         return stuck
 
     def retry_failed(self, job_id: str) -> list[Publication]:

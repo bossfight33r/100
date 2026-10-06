@@ -149,3 +149,16 @@ def test_parse_interval():
     for bad in ("1m", "abc", "h", ""):
         with pytest.raises(typer.BadParameter):
             parse_interval(bad)
+
+
+def test_rerender_on_busy_job_changes_nothing(reviewed):
+    app, job_id, svc = reviewed
+    clip = app.db.list_clips(job_id)[0]
+    svc.approve(job_id, clip.clip_id)
+    app.job_busy = lambda jid: True  # задача уже в очереди/выполняется
+    with pytest.raises(ReviewError, match="already queued"):
+        svc.rerender_crop(job_id, clip.clip_id, center_x=0.3)
+    with pytest.raises(ReviewError):
+        svc.rerender_captions(job_id, clip.clip_id)
+    assert app.load_overrides(job_id).crop_center_x == {}
+    assert app.db.get_clip(job_id, clip.clip_id).status == ClipStatus.approved

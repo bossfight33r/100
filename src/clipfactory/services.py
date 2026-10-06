@@ -178,13 +178,18 @@ class App:
 
         return InlineQueue(lambda task: dispatch(self, task))
 
+    def job_busy(self, job_id: str) -> bool:
+        from clipfactory.queue.base import TaskStatus
+        from clipfactory.worker import run_job_task_id
+
+        return self.queue.status(run_job_task_id(job_id)) in (TaskStatus.queued, TaskStatus.running)
+
     def enqueue_job(
         self, job_id: str, *, force_stage: StageName | None = None, no_cache: bool = False
     ) -> str:
-        from clipfactory.queue.base import TaskStatus
-        from clipfactory.worker import make_run_task, run_job_task_id
+        from clipfactory.worker import make_run_task
 
-        if self.queue.status(run_job_task_id(job_id)) in (TaskStatus.queued, TaskStatus.running):
+        if self.job_busy(job_id):
             raise JobBusy(f"job {job_id} is already queued or running")
         self.db.clear_cancel(job_id)
         self.db.set_job_status(job_id, JobStatus.queued)

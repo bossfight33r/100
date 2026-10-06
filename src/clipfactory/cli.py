@@ -345,8 +345,13 @@ def track(
     typer.echo(f"Сбор статистики каждые {every}; Ctrl+C — стоп")
     try:
         while True:
-            snaps = collect_youtube(app_)
-            typer.echo(f"{time.strftime('%Y-%m-%d %H:%M')} снимков: {len(snaps)}")
+            stamp = time.strftime("%Y-%m-%d %H:%M")
+            try:
+                snaps = collect_youtube(app_)
+            except Exception as e:  # сбой одного прохода (DB занята и т.п.) не останавливает сбор
+                typer.echo(f"{stamp} ошибка: {e}", err=True)
+            else:
+                typer.echo(f"{stamp} снимков: {len(snaps)}")
             time.sleep(interval)
     except KeyboardInterrupt:
         typer.echo("Остановлено.")

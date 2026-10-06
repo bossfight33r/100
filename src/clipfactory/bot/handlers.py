@@ -409,7 +409,8 @@ def build_router(ctl: BotController, rt: Runtime, inbox: Path) -> Router:
         if not command.args:
             await message.answer("Использование: /cancel JOB_ID")
             return
-        await send_outs(bot, message.chat.id, ctl.cancel(command.args.strip()), ctl, rt)
+        outs = await asyncio.to_thread(ctl.cancel, command.args.strip())
+        await send_outs(bot, message.chat.id, outs, ctl, rt)
 
     @router.message(Command("stats"))
     async def _stats(message: Message, bot: Bot) -> None:

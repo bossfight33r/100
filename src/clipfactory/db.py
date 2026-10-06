@@ -183,6 +183,8 @@ class Database:
         with self.connect() as c:
             c.execute("PRAGMA journal_mode = WAL")
             c.executescript(SCHEMA)
+            # блокировка на запись: бот и воркер, стартуя одновременно, не мигрируют дважды
+            c.execute("BEGIN IMMEDIATE")
             row = c.execute("SELECT version FROM schema_version").fetchone()
             if row is None:
                 c.execute("INSERT INTO schema_version(version) VALUES (1)")
@@ -464,6 +466,15 @@ class Database:
                  pub.account_id, pub.external_id, pub.url, _ts(pub.scheduled_at),
                  _ts(pub.published_at), pub.status.value, pub.error, now, now),
             )  # fmt: skip
+
+    def stale_publishing(self, job_id: str, older_than: datetime) -> list[Publication]:
+        """Публикации в 'publishing', которые не обновлялись с ``older_than`` (лиза истекла)."""
+        with self.connect() as c:
+            rows = c.execute(
+                "SELECT * FROM publications WHERE job_id=? AND status='publishing' AND updated_at < ?",
+                (job_id, _ts(older_than)),
+            ).fetchall()
+        return [self._pub(r) for r in rows]
 
     def get_publication(self, pub_id: str) -> Publication:
         with self.connect() as c:

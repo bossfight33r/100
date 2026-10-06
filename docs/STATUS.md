@@ -17,22 +17,25 @@
 
 ## Что работает
 
-- **CLI**: `capabilities`, `run`, `status`, `enqueue`, `retry`, `worker`, `review`, `auth youtube`, `publish`, `track`, `report`, `bot`; флаги `--json`, `--verbose`, `--force-stage`, `--no-cache`.
+- **CLI**: `capabilities`, `run`, `status`, `enqueue`, `retry`, `cancel`, `worker`, `review` (approve/reject/edit/captions/crop), `auth youtube`, `publish` (`--retry-failed`), `track` (`--every`), `report`, `bot`; флаги `--json`, `--verbose`, `--force-stage`, `--no-cache`.
 - **Pipeline**: ingest (файл/HTTP/yt-dlp, remux без перекодирования) → transcribe (mlx/faster-whisper, пословно) → select (Claude, чанки 20 мин/60 с, подгонка по словам и паузам) → reframe (MediaPipe + смены сцен, гистерезис, кусочно-постоянный кроп) → captions (ASS, подсветка слова, safe zone) → render (один ffmpeg, 1080x1920, loudnorm, H.264/AAC, валидация ffprobe) → meta.json по платформам.
-- **Надёжность**: манифесты и кеш по хешам, resume/retry с первого невалидного этапа, stage_runs, RQ + SimpleWorker, восстановление job из SQLite после падения воркера/потери Redis.
+- **Надёжность**: манифесты и кеш по хешам, кеш на уровне клипа (правка одного клипа не перекодирует остальные), resume/retry с первого невалидного этапа, отмена идущей job, stage_runs, миграции схемы БД, RQ + SimpleWorker, защита от дублей задач, восстановление job из SQLite после падения воркера/потери Redis.
 - **Ревью**: approve/reject/edit metadata/rerender captions/crop, журнал review_actions; метаданные переиспользуются при перерендере.
-- **Бот**: ADMIN_IDS, файл/URL/путь, выбор кампании, прогресс одним сообщением, карточки клипов, кнопки ревью, retry, `/jobs`, `/status`, `/publish`, `/stats`.
-- **Публикация**: scheduler (окна, timezone, daily_limit, DST), YouTube resumable upload + publishAt, export-пакеты TikTok/Instagram, rejected не публикуются.
+- **Бот**: ADMIN_IDS, файл/URL/путь, выбор кампании, прогресс одним сообщением, карточки клипов, кнопки ревью, retry, `/jobs`, `/status`, `/publish`, `/stats`, `/cancel`; локальный Bot API server (`CF_TELEGRAM_API_URL`) для файлов до 2 ГБ.
+- **Публикация**: scheduler (окна, timezone, daily_limit, DST), YouTube resumable upload + publishAt, перенос прошедшего слота, export-пакеты TikTok/Instagram, rejected не публикуются; прерванная загрузка не повторяется автоматически (лиза 30 мин, затем `--retry-failed` после проверки канала).
 - **Статистика/доход**: YouTube collector, ручной ввод, append-only снимки, earnings-стратегия, отчёты, аналитика хуков, файл рекомендаций к промпту.
+- Два прохода независимого code review: 20 находок, все закрыты (подробно — CHANGELOG).
+- Адаптеры faster-whisper, mlx, Anthropic, YouTube протестированы на настоящих типах/исключениях библиотек.
 - Проверено в Linux-контейнере: реальный ffmpeg-рендер, реальный MediaPipe (нужны `libegl1 libgles2`), реальный redis-server + `cf worker`.
 
 ## Что не проверено / ограничения
 
-- mlx-whisper, h264_videotoolbox — нет Мака в окружении; faster-whisper не запускался (модель не скачивалась). Всё покрыто fake-бэкендами.
+- mlx-whisper, h264_videotoolbox — нет Мака в окружении. Реальное распознавание faster-whisper не запускалось: HuggingFace и CDN OpenAI закрыты политикой прокси этого окружения, весов нет на PyPI. Адаптер проверен на настоящих классах `faster_whisper`.
 - Anthropic API, Telegram, YouTube OAuth/загрузка/статистика — реальные вызовы запрещены в этом окружении; покрыты фейками (SDK-вызовы написаны по документации SDK `anthropic` 1.x).
-- Облачный Bot API скачивает файлы только до 20 МБ — для больших видео слать боту путь или ссылку.
+- Облачный Bot API скачивает файлы только до 20 МБ — для больших видео: путь, ссылка или локальный Bot API server.
 - TikTok/Instagram — только export-пакеты (ручная заливка).
-- Перерендер одного клипа перерендеривает видео всех клипов job (детерминированно; метаданные переиспользуются).
+- Загрузка дольше 30 мин в другом процессе может быть ошибочно признана прерванной при параллельном `cf publish` (для shorts нереалистично; см. `PUBLISHING_LEASE`).
+- Отмена не прерывает вызов Whisper/LLM посередине — срабатывает сразу после него.
 
 ## Блокеры
 
