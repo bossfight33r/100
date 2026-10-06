@@ -264,3 +264,34 @@ def test_clip_status_reset_when_select_picks_new_moment(tmp_path):
     new = app.db.get_clip(job.id, clip.clip_id)
     assert (new.start, new.end) != (clip.start, clip.end)
     assert new.status == ClipStatus.pending_review and new.meta_override is None
+
+
+def test_real_google_http_error_is_classified():
+    import httplib2
+    from googleapiclient.errors import HttpError
+
+    from clipfactory.publish.base import PublishRequest
+    from clipfactory.schemas import Account, PlatformClipMeta
+
+    def err(status, reason):
+        content = json.dumps({"error": {"errors": [{"reason": reason}]}}).encode()
+        return HttpError(httplib2.Response({"status": status}), content)
+
+    def req():
+        return PublishRequest(
+            publication_id="p", account=Account(id="a", platform="youtube", name="a"),
+            video_path=None, thumb_path=None, scheduled_at=None,
+            meta=PlatformClipMeta(platform="youtube", title="t", description="d"),
+        )  # fmt: skip
+
+    cases = [
+        ([err(403, "quotaExceeded")], True, "quota"),
+        ([err(403, "forbidden")], False, "403"),
+        ([err(503, "backendError")] * 7, True, "503"),
+    ]
+    for script, retryable, text in cases:
+        pub = YouTubePublisher(lambda a, s=script: FakeYouTube(script=list(s)),
+                               media_factory=lambda p: p, sleep=lambda s: None, clock=lambda: NOW)  # fmt: skip
+        with pytest.raises(PublishError) as ei:
+            pub.publish(req())
+        assert ei.value.retryable is retryable and text in str(ei.value)
