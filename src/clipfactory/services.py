@@ -96,8 +96,11 @@ def llm_config_problem(settings: Settings) -> str | None:
     if p == "openai_compat":
         if not settings.llm_base_url:
             return "CF_LLM_PROVIDER=openai_compat требует CF_LLM_BASE_URL"
-        if not settings.llm_model:
-            return "CF_LLM_PROVIDER=openai_compat требует CF_LLM_MODEL"
+        if not settings.llm_model or "llm_model" not in settings.model_fields_set:
+            return (
+                "CF_LLM_PROVIDER=openai_compat требует CF_LLM_MODEL "
+                "(например gemini-3.5-flash-lite) — иначе остаётся модель по умолчанию"
+            )
         host = urllib.parse.urlparse(settings.llm_base_url).hostname or ""
         local = host in {"localhost", "127.0.0.1", "::1"}
         if not settings.llm_api_key and not local:

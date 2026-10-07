@@ -201,13 +201,29 @@ def test_campaign_transcribe_false_requires_signals():
         (dict(llm_provider="openai_compat", llm_base_url=None), "CF_LLM_BASE_URL"),
         (
             dict(llm_provider="openai_compat", llm_base_url="https://api.example.com/v1"),
-            "CF_LLM_API_KEY",
+            "CF_LLM_MODEL",
         ),
-        (dict(llm_provider="openai_compat", llm_base_url="http://localhost:1234/v1"), None),
         (
             dict(
                 llm_provider="openai_compat",
                 llm_base_url="https://api.example.com/v1",
+                llm_model="gemini-3.5-flash-lite",
+            ),
+            "CF_LLM_API_KEY",
+        ),
+        (
+            dict(
+                llm_provider="openai_compat",
+                llm_base_url="http://localhost:1234/v1",
+                llm_model="local",
+            ),
+            None,
+        ),
+        (
+            dict(
+                llm_provider="openai_compat",
+                llm_base_url="https://api.example.com/v1",
+                llm_model="gemini-3.5-flash-lite",
                 llm_api_key="k" * 20,
             ),
             None,

@@ -359,6 +359,15 @@ def rescore(cand: ClipCandidate, sig: Any) -> ClipCandidate:
     return cand.model_copy(update={"score": int(round(min(max(score, 0), 100)))})
 
 
+def whole_trim_end(words: list[Word], limit: float) -> float:
+    """Обрезка по лимиту без разрезанного слова: конец — после последнего целого слова."""
+    inside = [w for w in words if w.start < limit < w.end]
+    if not inside:
+        return limit
+    before = [w.end for w in words if w.end <= inside[0].start]
+    return min(max(before) + 0.1, limit) if before else limit
+
+
 class SelectStage:
     name = StageName.select
     version = 1
@@ -492,11 +501,8 @@ class SelectStage:
         if duration < WHOLE_MIN_SEC:
             raise NoHighlightsError(f"source is too short for a clip ({duration:.1f}s)")
         end = min(duration, ctx.campaign.clip_max_sec)
-        if end < duration and transcript.words:
-            from clipfactory.pipeline import signals
-
-            _, end = signals.snap_to_words(0.0, end, transcript.words)
-            end = min(end, ctx.campaign.clip_max_sec, duration)
+        if end < duration:
+            end = whole_trim_end(transcript.words, end)
         title = info.title if info else ""
         cand = ClipCandidate(
             id="c01", start=0.0, end=round(end, 3), score=100, hook=title, title=title,

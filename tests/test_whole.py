@@ -60,3 +60,13 @@ def test_whole_long_source_trimmed(tmp_path, long_synthetic_video):
         stage.validate(ctx, res.outputs)
     (cand,) = ctx.read_model(ctx.key("highlights.json"), Highlights).candidates
     assert cand.end == 30
+
+
+def test_whole_trim_end_never_cuts_a_word():
+    from clipfactory.pipeline.select import whole_trim_end
+    from clipfactory.schemas import Word
+
+    words = [Word(text="a", start=27.0, end=28.5), Word(text="b", start=29.5, end=31.0)]
+    assert whole_trim_end(words, 30.0) == 28.6  # «b» не влезает целиком
+    assert whole_trim_end(words, 29.0) == 29.0  # граница в паузе
+    assert whole_trim_end([Word(text="x", start=0, end=40)], 30.0) == 30.0
