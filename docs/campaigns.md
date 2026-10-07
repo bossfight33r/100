@@ -18,11 +18,11 @@
 | `forbidden` | list | [] | слова, которых не должно быть в метаданных |
 | `notes` | str | "" | пожелания для LLM при выборе моментов |
 | `accounts` | list | [] | id аккаунтов для публикации |
-| `selection` | enum | `transcript` | как искать моменты: `transcript` — LLM по речи (подкасты); `signals` — пики звука + YouTube «Most replayed» + чат, без LLM (игры; ADR-0014); `hybrid` — LLM по речи, пики подсказываются в промпте и дают 30% оценки (говорящие стримеры; ADR-0017) |
+| `selection` | enum | `transcript` | как искать моменты: `transcript` — LLM по речи (подкасты); `signals` — пики звука + YouTube «Most replayed» + чат, без LLM (игры; ADR-0014); `hybrid` — LLM по речи, пики подсказываются в промпте и дают 30% оценки (говорящие стримеры; ADR-0017); `whole` — исходник целиком одним клипом, длиннее `clip_max_sec` обрезается, `clip_min_sec` не действует (клипы Twitch/YouTube — уже хайлайт) |
 | `layout` | enum | `crop` | `crop` — кроп 9:16 по лицу/центру; `fit_blur` — весь кадр по центру, сверху и снизу размытый фон (геймплей; ADR-0015) |
 | `fit_zoom` | float 1–2 | 1.0 | для `fit_blur`: >1 — кадр крупнее, края срезаются |
 | `title_overlay` | bool | false | заголовок клипа (YouTube-заголовок от LLM, без хэштегов и эмодзи) крупно сверху кадра; при `fit_blur` — в верхней размытой полосе. Правка заголовка в ревью видео не меняет |
-| `transcribe` | bool | true | `false` — без Whisper и субтитров (только при `selection: signals`) |
+| `transcribe` | bool | true | `false` — без Whisper и субтитров (только при `selection: signals` или `whole`) |
 
 ```yaml
 id: example
@@ -41,6 +41,8 @@ accounts: [yt_main, tt_main]
 ```
 
 Игровая кампания — `config/campaigns/cs2.yaml`: `selection: signals`, `transcribe: false`, `layout: fit_blur`, клипы 15–45 с (окно ~22 с, пик на 65% клипа). LLM в такой кампании пишет только заголовки и описания.
+
+Готовые клипы стримов — `config/campaigns/stream_clips.yaml` (`selection: whole`): источник — `cf discover "https://www.twitch.tv/<канал>/clips" --min-minutes 0` или `cf watch` с `min_minutes: 0`.
 
 Доход: `views / 1000 × rate_per_1k_views` по последнему снимку статистики каждой публикации (`cf report`). Итог не хранится — пересчитывается из истории.
 

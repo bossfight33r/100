@@ -79,6 +79,7 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 - [docs/pipeline.md](docs/pipeline.md) — этапы, артефакты, кеш
 - [docs/runbook.md](docs/runbook.md) — эксплуатация и частые ошибки
 - [docs/campaigns.md](docs/campaigns.md) — кампании и аккаунты
+- [docs/gaming.md](docs/gaming.md) — игровой контент (CS2): поиск видео, сигналы, раскладка, автоматизация
 - [docs/decisions/](docs/decisions/) — ADR
 
 ## Перенос на сервер

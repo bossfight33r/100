@@ -65,7 +65,7 @@ class IngestStage:
 
     @staticmethod
     def wants_chat(ctx: StageContext) -> bool:
-        return ctx.campaign.selection is not SelectionMode.transcript
+        return ctx.campaign.selection in (SelectionMode.signals, SelectionMode.hybrid)
 
     def config(self, ctx: StageContext) -> dict[str, Any]:
         cfg: dict[str, Any] = {"source": ctx.job.source}

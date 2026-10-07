@@ -334,6 +334,7 @@ def select_highlights(
 
 
 HYBRID_SIGNAL_SHARE = 0.3  # доля сигнала в итоговой оценке гибрида
+WHOLE_MIN_SEC = 3.0  # selection: whole — короче не клип
 
 
 def peak_hint(sig: Any, start: float, end: float) -> str:
@@ -364,6 +365,12 @@ class SelectStage:
 
     def config(self, ctx: StageContext) -> dict[str, Any]:
         c = ctx.campaign
+        if c.selection is SelectionMode.whole:
+            return {
+                "selection": "whole",
+                "clip_min_sec": c.clip_min_sec,
+                "clip_max_sec": c.clip_max_sec,
+            }
         if c.selection is SelectionMode.signals:
             from clipfactory.pipeline import signals
 
@@ -402,7 +409,10 @@ class SelectStage:
 
     def input_keys(self, ctx: StageContext) -> list[str]:
         keys = [ctx.key("transcript.json")]
-        if ctx.campaign.selection is not SelectionMode.transcript:
+        if ctx.campaign.selection is SelectionMode.whole:
+            if ctx.storage.exists(ctx.key("source.info.json")):
+                keys.append(ctx.key("source.info.json"))
+        elif ctx.campaign.selection is not SelectionMode.transcript:
             keys.append(ctx.key("audio.wav"))
             for name in ("source.info.json", "chat.json"):
                 if ctx.storage.exists(ctx.key(name)):
@@ -413,6 +423,8 @@ class SelectStage:
         transcript = ctx.read_model(ctx.key("transcript.json"), Transcript)
         if ctx.campaign.selection is SelectionMode.signals:
             return self._run_signals(ctx, transcript)
+        if ctx.campaign.selection is SelectionMode.whole:
+            return self._run_whole(ctx, transcript)
         sig = None
         outputs: list[str] = []
         if ctx.campaign.selection is SelectionMode.hybrid:
@@ -472,11 +484,35 @@ class SelectStage:
             info={"clips": len(candidates), "signals": sorted(sig.series)},
         )
 
+    def _run_whole(self, ctx: StageContext, transcript: Transcript) -> StageResult:
+        """Исходник — уже хайлайт (клип Twitch/YouTube): один клип, длиннее clip_max — обрезка."""
+        info_key = ctx.key("source.info.json")
+        info = ctx.read_model(info_key, SourceInfo) if ctx.storage.exists(info_key) else None
+        duration = transcript.duration
+        if duration < WHOLE_MIN_SEC:
+            raise NoHighlightsError(f"source is too short for a clip ({duration:.1f}s)")
+        end = min(duration, ctx.campaign.clip_max_sec)
+        if end < duration and transcript.words:
+            from clipfactory.pipeline import signals
+
+            _, end = signals.snap_to_words(0.0, end, transcript.words)
+            end = min(end, ctx.campaign.clip_max_sec, duration)
+        title = info.title if info else ""
+        cand = ClipCandidate(
+            id="c01", start=0.0, end=round(end, 3), score=100, hook=title, title=title,
+            reason="Whole source used as a clip (already a highlight)"
+            + (f"; source title: {title}" if title else ""),
+        )  # fmt: skip
+        key = ctx.key("highlights.json")
+        ctx.write_model(key, Highlights(candidates=[cand]))
+        return StageResult(stage=self.name, outputs=[key], info={"clips": 1})
+
     def validate(self, ctx: StageContext, outputs: list[str]) -> None:
         h = ctx.read_model(ctx.key("highlights.json"), Highlights)
         if not h.candidates:
             raise ValidationFailed("highlights.json is empty")
         c = ctx.campaign
+        lo = WHOLE_MIN_SEC if c.selection is SelectionMode.whole else c.clip_min_sec
         for cand in h.candidates:
-            if not (c.clip_min_sec - 0.5 <= cand.duration <= c.clip_max_sec + 0.5):
+            if not (lo - 0.5 <= cand.duration <= c.clip_max_sec + 0.5):
                 raise ValidationFailed(f"clip {cand.id} duration {cand.duration:.1f}s out of range")

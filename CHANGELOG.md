@@ -1,5 +1,9 @@
 # Changelog
 
+## [Whole] Готовые клипы стримов
+
+- `selection: whole`: исходник целиком одним клипом (длиннее `clip_max_sec` — обрезка по границе слова; `clip_min_sec` не действует), заголовок источника — в hook/title. Кампания `stream_clips` (fit_blur + заголовок) для Twitch/YouTube Clips через `cf discover`/`cf watch`.
+
 ## [API] Поиск, наблюдение и сигналы для приложения
 
 - `GET /discover`, `GET /watch`, `POST /watch/check`, `GET /jobs/{id}/signals`; `docs/openapi.json` пересобран, в `docs/gui-spec.md` — экран «Поиск видео» и график сигналов на экране ревью.

@@ -15,7 +15,7 @@ from clipfactory.schemas import SelectionMode, StageName, StageResult, Transcrip
 
 
 def speech_required(ctx: StageContext) -> bool:
-    return ctx.campaign.selection is not SelectionMode.signals
+    return ctx.campaign.selection in (SelectionMode.transcript, SelectionMode.hybrid)
 
 
 class TranscribeStage:

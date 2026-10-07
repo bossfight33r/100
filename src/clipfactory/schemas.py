@@ -104,6 +104,7 @@ class SelectionMode(StrEnum):
     transcript = "transcript"  # LLM по тексту речи (подкасты, интервью)
     signals = "signals"  # пики звука и YouTube «Most replayed» (игры, стримы) — ADR-0014
     hybrid = "hybrid"  # LLM по речи + подсказки пиков сигналов и их вес в оценке — ADR-0017
+    whole = "whole"  # исходник целиком одним клипом: клипы Twitch/YouTube (уже хайлайт)
 
 
 class Layout(StrEnum):
@@ -135,8 +136,11 @@ class Campaign(_Model):
     def _durations(self) -> Campaign:
         if self.clip_min_sec > self.clip_max_sec:
             raise ValueError("clip_min_sec must be <= clip_max_sec")
-        if not self.transcribe and self.selection is not SelectionMode.signals:
-            raise ValueError("transcribe: false requires selection: signals")
+        if not self.transcribe and self.selection not in (
+            SelectionMode.signals,
+            SelectionMode.whole,
+        ):
+            raise ValueError("transcribe: false requires selection: signals or whole")
         return self
 
 

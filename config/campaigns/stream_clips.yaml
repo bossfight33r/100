@@ -1,0 +1,17 @@
+# Готовые клипы стримов (Twitch Clips, YouTube Clips): зрители уже выбрали момент —
+# переводим целиком в вертикаль. Источник: cf discover/watch по twitch.tv/<канал>/clips
+id: stream_clips
+name: Stream clips (whole)
+rate_per_1k_views: 1.0
+platforms: [youtube, tiktok]
+clip_min_sec: 5
+clip_max_sec: 60              # длиннее — обрезается по границе слова
+clip_count: 1
+language: ru
+selection: whole
+transcribe: true              # субтитры, если в клипе говорят; false — быстрее, без субтитров
+layout: fit_blur
+title_overlay: true
+must_include_tags: ["#shorts"]
+forbidden: ["казино", "ставки"]
+accounts: [yt_main, tt_main]
