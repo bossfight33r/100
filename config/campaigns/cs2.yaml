@@ -5,7 +5,8 @@ rate_per_1k_views: 1.0
 platforms: [youtube, tiktok]
 clip_min_sec: 15
 clip_max_sec: 45
-clip_count: 8
+clip_count: 4                 # минимум
+clips_per_10min: 3            # 1 ч стрима → 18 клипов
 language: ru
 selection: signals            # пики звука + YouTube «Most replayed» вместо LLM по тексту
 transcribe: false             # без Whisper и субтитров; true — субтитры, если стример говорит

@@ -11,7 +11,8 @@
 | `rate_per_1k_views` | float ≥ 0 | — | ставка за 1000 просмотров |
 | `platforms` | list | — | `youtube`, `tiktok`, `instagram` — для каких платформ генерировать метаданные |
 | `clip_min_sec` / `clip_max_sec` | float | 20 / 60 | границы длительности клипа |
-| `clip_count` | int | 3 | сколько клипов рендерить |
+| `clip_count` | int | 3 | сколько клипов рендерить (с `clips_per_10min` — минимум) |
+| `clips_per_10min` | float\|null | null | клипов на каждые 10 минут исходника: 2 → 30 мин = 6 клипов, 2 ч = 24 (не больше 50) |
 | `language` | str\|null | null | язык Whisper; null — автоопределение |
 | `must_include_tags` | list | [] | хэштеги, которые обязательно добавляются |
 | `mentions` | list | [] | упоминания, дописываются в описание |

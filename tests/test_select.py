@@ -126,3 +126,27 @@ def test_select_non_retryable_llm_error_propagates():
     with pytest.raises(LLMError):
         select_highlights(make_transcript(5), CAMPAIGN, FakeLLM(responder=boom),
                           chunk_sec=1200, overlap_sec=60)  # fmt: skip
+
+
+def test_clip_count_scales_with_duration():
+    c = Campaign(id="c", name="c", rate_per_1k_views=1, platforms=["youtube"],
+                 clip_count=3, clips_per_10min=2)  # fmt: skip
+    assert c.clip_count_for(5 * 60) == 3  # минимум — clip_count
+    assert c.clip_count_for(30 * 60) == 6
+    assert c.clip_count_for(2 * 3600) == 24
+    assert c.clip_count_for(100 * 3600) == 50
+    assert CAMPAIGN.clip_count_for(3 * 3600) == CAMPAIGN.clip_count
+
+
+def test_select_highlights_more_clips_for_longer_video():
+    transcript = make_transcript(n_sentences=120)  # ~9.6 мин
+    many = CAMPAIGN.model_copy(
+        update={"clip_count": CAMPAIGN.clip_count_for(0), "clips_per_10min": 5}
+    )
+    count = many.clip_count_for(transcript.duration)
+    assert count == 5
+    clips = select_highlights(
+        transcript, many.model_copy(update={"clip_count": count}),
+        FakeLLM(clip_len=15, per_chunk=8), chunk_sec=1200, overlap_sec=60,
+    )  # fmt: skip
+    assert len(clips) == 5

@@ -5,7 +5,8 @@ rate_per_1k_views: 1.5        # $ за 1000 просмотров
 platforms: [youtube, tiktok]
 clip_min_sec: 20
 clip_max_sec: 60
-clip_count: 3
+clip_count: 3                 # минимум
+clips_per_10min: 2            # 30 мин → 6 клипов, 2 ч → 24 (до 50)
 language: ru                  # null — автоопределение Whisper
 must_include_tags: ["#shorts"]
 mentions: ["@example_brand"]

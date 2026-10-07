@@ -327,7 +327,8 @@ def test_default_campaign_cache_keys_unchanged(tmp_path, synthetic_video):
     app = make_app(tmp_path)
     ctx = app.context(app.create_job(str(synthetic_video), "example"))
     assert set(TranscribeStage().config(ctx)) == {"backend", "language"}
-    assert set(SelectStage().config(ctx)) == {
+    # clips_per_10min — поле самой кампании example, а не изменение кода
+    assert set(SelectStage().config(ctx)) - {"clips_per_10min"} == {
         "llm", "prompt_sha", "clip_min_sec", "clip_max_sec", "clip_count", "notes", "chunk",
     }  # fmt: skip
     assert SelectStage().input_keys(ctx) == [ctx.key("transcript.json")]

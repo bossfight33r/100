@@ -311,7 +311,16 @@ def select_highlights(
     system = template.substitute(
         clip_min_sec=int(campaign.clip_min_sec),
         clip_max_sec=int(campaign.clip_max_sec),
-        max_candidates=max(campaign.clip_count * 2, 5),
+        # доля клипов на чанк: длинное видео не просит у LLM все клипы в каждом чанке
+        max_candidates=max(
+            math.ceil(
+                campaign.clip_count
+                * min(chunk_sec, transcript.duration or chunk_sec)
+                / max(transcript.duration, 1.0)
+            )
+            * 2,
+            5,
+        ),
         notes=campaign.notes.strip() or "(none)",
     )
     raw: list[RawHighlight] = []
@@ -391,6 +400,7 @@ class SelectStage:
                 "clip_min_sec": c.clip_min_sec,
                 "clip_max_sec": c.clip_max_sec,
                 "clip_count": c.clip_count,
+                **self.scaling_config(ctx),
             }
         return {
             "llm": ctx.backends.identity("llm"),
@@ -401,7 +411,13 @@ class SelectStage:
             "notes": c.notes,
             "chunk": [ctx.settings.chunk_seconds, ctx.settings.chunk_overlap_seconds],
             **self.hybrid_config(ctx),
+            **self.scaling_config(ctx),
         }
+
+    @staticmethod
+    def scaling_config(ctx: StageContext) -> dict[str, Any]:
+        per = ctx.campaign.clips_per_10min
+        return {} if per is None else {"clips_per_10min": per}
 
     @staticmethod
     def hybrid_config(ctx: StageContext) -> dict[str, Any]:
@@ -430,8 +446,12 @@ class SelectStage:
 
     def run(self, ctx: StageContext) -> StageResult:
         transcript = ctx.read_model(ctx.key("transcript.json"), Transcript)
+        # clips_per_10min: дальше — как обычный clip_count этой длины видео
+        campaign = ctx.campaign.model_copy(
+            update={"clip_count": ctx.campaign.clip_count_for(transcript.duration)}
+        )
         if ctx.campaign.selection is SelectionMode.signals:
-            return self._run_signals(ctx, transcript)
+            return self._run_signals(ctx, transcript, campaign)
         if ctx.campaign.selection is SelectionMode.whole:
             return self._run_whole(ctx, transcript)
         sig = None
@@ -441,7 +461,7 @@ class SelectStage:
             outputs.append(ctx.key("signals.json"))
         candidates = select_highlights(
             transcript,
-            ctx.campaign,
+            campaign,
             ctx.backends.llm,
             chunk_sec=ctx.settings.chunk_seconds,
             overlap_sec=ctx.settings.chunk_overlap_seconds,
@@ -468,17 +488,17 @@ class SelectStage:
         ctx.write_model(ctx.key("signals.json"), signals.trace(sig))
         return sig, info
 
-    def _run_signals(self, ctx: StageContext, transcript: Transcript) -> StageResult:
+    def _run_signals(
+        self, ctx: StageContext, transcript: Transcript, campaign: Campaign
+    ) -> StageResult:
         """Без LLM: пики звука и «Most replayed» (ADR-0014). LLM пишет только метаданные."""
         from clipfactory.pipeline import signals
 
         sig, info = self._signals(ctx)
         trace_key = ctx.key("signals.json")
         duration = transcript.duration or sig.length * sig.hop
-        picked = signals.pick_windows(
-            sig, ctx.campaign, duration, words=transcript.words, info=info
-        )
-        top = sorted(dedupe(picked), key=lambda c: (-c.score, c.start))[: ctx.campaign.clip_count]
+        picked = signals.pick_windows(sig, campaign, duration, words=transcript.words, info=info)
+        top = sorted(dedupe(picked), key=lambda c: (-c.score, c.start))[: campaign.clip_count]
         if not top:
             raise NoHighlightsError(
                 "no signal peaks found (quiet audio, no YouTube heatmap or video too short)"

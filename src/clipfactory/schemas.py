@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -100,6 +101,9 @@ class Account(_Model):
         return v
 
 
+CLIP_COUNT_CAP = 50
+
+
 class SelectionMode(StrEnum):
     transcript = "transcript"  # LLM по тексту речи (подкасты, интервью)
     signals = "signals"  # пики звука и YouTube «Most replayed» (игры, стримы) — ADR-0014
@@ -120,6 +124,7 @@ class Campaign(_Model):
     clip_min_sec: float = Field(default=20, gt=0)
     clip_max_sec: float = Field(default=60, gt=0)
     clip_count: int = Field(default=3, ge=1)
+    clips_per_10min: float | None = Field(default=None, gt=0)  # больше видео — больше клипов
     language: str | None = None
     must_include_tags: list[str] = Field(default_factory=list)
     mentions: list[str] = Field(default_factory=list)
@@ -131,6 +136,13 @@ class Campaign(_Model):
     layout: Layout = Layout.crop
     fit_zoom: float = Field(default=1.0, ge=1.0, le=2.0)  # fit_blur: >1 — крупнее, края срезаются
     title_overlay: bool = False  # заголовок клипа крупно сверху кадра (игровые shorts)
+
+    def clip_count_for(self, duration_sec: float) -> int:
+        """clip_count — минимум; с clips_per_10min число растёт с длиной видео (до 50)."""
+        if self.clips_per_10min is None:
+            return self.clip_count
+        scaled = math.ceil(duration_sec / 600 * self.clips_per_10min)
+        return min(max(self.clip_count, scaled), CLIP_COUNT_CAP)
 
     @model_validator(mode="after")
     def _durations(self) -> Campaign:
