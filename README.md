@@ -41,7 +41,9 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 .venv/bin/cf run "https://youtu.be/..." --campaign cs2   # config/campaigns/cs2.yaml
 ```
 
-`selection: signals` + `transcribe: false` в кампании. Если стример говорит и нужны субтитры — `transcribe: true`.
+Где брать видео: `cf discover "https://www.youtube.com/@канал/videos" --heatmap` — список по просмотрам, 🔥 — есть кривая «Most replayed»; `--enqueue 5 -c cs2` — сразу в очередь.
+
+`selection: signals` + `transcribe: false` + `layout: fit_blur` в кампании. Если стример говорит и нужны субтитры — `transcribe: true`.
 
 ## Команды `cf`
 
@@ -50,6 +52,8 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 | `cf capabilities` | ffmpeg, ffprobe, энкодеры, платформа, доступные транскриберы |
 | `cf run SOURCE --campaign ID` | синхронно выполнить весь pipeline (файл или URL) |
 | `cf status JOB_ID` | статус job, упавший этап, этапы (cache/completed), клипы |
+| `cf discover URL [--heatmap] [--enqueue N -c ID]` | найти исходники: видео канала/плейлиста по просмотрам (без скачивания), фильтр длительности, уже обработанные скрыты; `--heatmap` — проверить «Most replayed»; `--enqueue` — поставить N лучших в очередь |
+| `cf signals JOB_ID` | ряды сигналов (звук, heatmap, чат) и выбранные клипы на одной шкале в терминале — для подстройки весов |
 | `cf enqueue SOURCE --campaign ID` | создать job и поставить в очередь (`CF_QUEUE=rq`) |
 | `cf retry JOB_ID [--force-stage STAGE]` | повторить с первого невалидного этапа |
 | `cf cancel JOB_ID` | снять из очереди или остановить идущую job (продолжить потом — `cf retry`) |
@@ -65,7 +69,7 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 
 Флаги `run`: `--force-stage STAGE` (перезапустить этап и всё после), `--no-cache`.
 
-Глобальные флаги: `--verbose`, `--json`. Бот: `/jobs`, `/status`, `/publish`, `/stats`, `/cancel` + кнопки ревью.
+Глобальные флаги: `--verbose`, `--json`. Бот: `/jobs`, `/status`, `/publish`, `/stats`, `/cancel`, `/discover URL` (список видео канала → кнопка → кампания) + кнопки ревью.
 
 ## Документация
 

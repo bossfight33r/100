@@ -105,6 +105,11 @@ class SelectionMode(StrEnum):
     signals = "signals"  # пики звука и YouTube «Most replayed» (игры, стримы) — ADR-0014
 
 
+class Layout(StrEnum):
+    crop = "crop"  # кроп 9:16 по лицу/центру (говорящие головы)
+    fit_blur = "fit_blur"  # весь кадр по центру, сверху и снизу размытый фон (геймплей)
+
+
 class Campaign(_Model):
     id: str
     name: str
@@ -121,6 +126,8 @@ class Campaign(_Model):
     accounts: list[str] = Field(default_factory=list)
     selection: SelectionMode = SelectionMode.transcript
     transcribe: bool = True  # False — без Whisper и без субтитров (только для selection: signals)
+    layout: Layout = Layout.crop
+    fit_zoom: float = Field(default=1.0, ge=1.0, le=2.0)  # fit_blur: >1 — крупнее, края срезаются
 
     @model_validator(mode="after")
     def _durations(self) -> Campaign:
@@ -157,6 +164,35 @@ class SourceInfo(_Model):
     view_count: int | None = None
     heatmap: list[HeatPoint] = Field(default_factory=list)
     chapters: list[Chapter] = Field(default_factory=list)
+    was_live: bool = False  # запись стрима — у неё может быть чат
+
+
+class SignalsTrace(_Model):
+    """signals.json: ряды сигналов select (signals) для отладки и подстройки весов."""
+
+    hop: float = Field(gt=0)
+    weights: dict[str, float]
+    series: dict[str, list[float]]
+    fused: list[float]
+
+
+class ChatActivity(_Model):
+    """chat.json: сообщений чата записи стрима на каждые hop секунд (ADR-0016)."""
+
+    hop: float = Field(gt=0)
+    counts: list[int]
+
+
+class SourceCandidate(_Model):
+    """Видео-кандидат из `cf discover` (канал/плейлист)."""
+
+    url: str
+    title: str = ""
+    channel: str = ""
+    duration: float | None = None
+    view_count: int | None = None
+    heatmap_points: int | None = None  # None — не проверялось
+    already_processed: bool = False
 
 
 # ---------------------------------------------------------------- selection / clips

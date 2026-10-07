@@ -50,6 +50,7 @@ def source_info_from_ytdlp(info: dict[str, Any]) -> dict[str, Any]:
         "view_count": int(views) if views is not None and views >= 0 else None,
         "heatmap": heatmap,
         "chapters": chapters,
+        "was_live": info.get("live_status") == "was_live" or info.get("was_live") is True,
     }
 
 

@@ -18,7 +18,7 @@ REVIEW_ACTIONS = {
 
 @dataclass(frozen=True)
 class Callback:
-    kind: str  # camp | rv | retry | clips
+    kind: str  # camp | rv | retry | clips | pick
     action: str = ""
     job_id: str = ""
     clip_id: str = ""
@@ -33,6 +33,8 @@ def parse_callback(data: str) -> Callback | None:
         return Callback(
             kind="rv", action=REVIEW_ACTIONS[parts[1]], job_id=parts[2], clip_id=parts[3]
         )
+    if parts[0] == "pick" and len(parts) == 2 and parts[1].isdigit():
+        return Callback(kind="pick", value=parts[1])
     if parts[0] in ("retry", "clips") and len(parts) == 2:
         return Callback(kind=parts[0], job_id=parts[1])
     return None
@@ -66,3 +68,10 @@ def retry_kb(job_id: str) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def discover_kb(count: int) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(text=str(i), callback_data=f"pick:{i}") for i in range(1, count + 1)
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[buttons[i : i + 5] for i in range(0, count, 5)])

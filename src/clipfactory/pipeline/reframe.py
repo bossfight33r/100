@@ -19,6 +19,7 @@ from clipfactory.pipeline.context import StageContext, ValidationFailed
 from clipfactory.schemas import (
     CropKeyframe,
     Highlights,
+    Layout,
     ReframePlan,
     StageName,
     StageResult,
@@ -162,13 +163,21 @@ class ReframeStage:
     def __init__(self, params: ReframeParams = ReframeParams()) -> None:
         self.params = params
 
+    @staticmethod
+    def needs_analysis(ctx: StageContext) -> bool:
+        """fit_blur показывает кадр целиком: лица и смены сцен не нужны."""
+        return ctx.campaign.layout is Layout.crop
+
     def config(self, ctx: StageContext) -> dict[str, Any]:
-        return {
+        cfg = {
             "face": ctx.backends.identity("face"),
             "analysis_fps": ctx.settings.analysis_fps,
             "params": self.params.__dict__,
             "overrides": ctx.overrides.crop_center_x,
         }
+        if not self.needs_analysis(ctx):  # ключ только для не-дефолтной раскладки
+            cfg = {"layout": ctx.campaign.layout.value}
+        return cfg
 
     def input_keys(self, ctx: StageContext) -> list[str]:
         return [ctx.key("source.mp4"), ctx.key("highlights.json")]
@@ -191,6 +200,7 @@ class ReframeStage:
                 v=self.version, source=source_sha, start=cand.start, end=cand.end,
                 face=ctx.backends.identity("face"), fps=ctx.settings.analysis_fps,
                 params=self.params.__dict__, override=override,
+                **({} if self.needs_analysis(ctx) else {"layout": ctx.campaign.layout.value}),
             )  # fmt: skip
             if clipcache.reusable(ctx, self.name.value, cand.id, fp) is not None:
                 outputs.append(key)
@@ -198,6 +208,8 @@ class ReframeStage:
                 continue
             samples: list[Sample] = []
             cuts: list[float] = []
+            if not self.needs_analysis(ctx):
+                override = 0.5
             if override is None:
                 cuts = ffmpeg.detect_scenes(
                     src,

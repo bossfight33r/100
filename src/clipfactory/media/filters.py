@@ -76,6 +76,37 @@ def escape_filter_value(value: str) -> str:
     return "".join("\\" + ch if ch in "\\'[],;" else ch for ch in level1)
 
 
+def _even(v: float) -> int:
+    return max(int(v) // 2 * 2, 2)
+
+
+def fit_dims(
+    src_w: int, src_h: int, target_w: int, target_h: int, zoom: float = 1.0
+) -> tuple[int, int, int, int]:
+    """fit_blur: (ширина, высота) масштабированного кадра и (ширина, высота) видимой части.
+
+    Кадр вписывается в target, при zoom > 1 увеличивается и обрезается по краям.
+    """
+    scale = min(target_w / src_w, target_h / src_h) * zoom
+    sw, sh = _even(src_w * scale), _even(src_h * scale)
+    return sw, sh, min(sw, target_w), min(sh, target_h)
+
+
+def fit_blur_chain(
+    src_w: int, src_h: int, target_width: int, target_height: int, zoom: float
+) -> str:
+    """[0:v] -> размытый фон + кадр целиком поверх; на выходе метка [base]."""
+    sw, sh, cw, ch = fit_dims(src_w, src_h, target_width, target_height, zoom)
+    bw, bh = _even(target_width / 8), _even(target_height / 8)  # размытие на малом кадре — дёшево
+    return (
+        f"[0:v]split=2[bg][fg];"
+        f"[bg]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
+        f"boxblur=8:2,scale={target_width}:{target_height},eq=brightness=-0.12[bgb];"
+        f"[fg]scale={sw}:{sh}:flags=lanczos,crop={cw}:{ch}[fgs];"
+        f"[bgb][fgs]overlay=({target_width}-{cw})/2:({target_height}-{ch})/2[base]"
+    )
+
+
 def render_filtergraph(
     *,
     keyframes: Sequence[CropKeyframe],
@@ -86,20 +117,27 @@ def render_filtergraph(
     fonts_dir: str | None,
     has_audio: bool,
     loudnorm: str | None = None,
+    fit: tuple[int, int, float] | None = None,
 ) -> str:
-    video = [
-        crop_filter(keyframes),
-        f"scale={target_width}:{target_height}:flags=lanczos",
-        "setsar=1",
-        f"fps={fps}",
-    ]
+    """fit=(src_w, src_h, zoom) — раскладка fit_blur вместо кропа по keyframes."""
+    if fit is not None:
+        prefix = fit_blur_chain(fit[0], fit[1], target_width, target_height, fit[2]) + ";[base]"
+        video = ["setsar=1", f"fps={fps}"]
+    else:
+        prefix = "[0:v]"
+        video = [
+            crop_filter(keyframes),
+            f"scale={target_width}:{target_height}:flags=lanczos",
+            "setsar=1",
+            f"fps={fps}",
+        ]
     if ass_file:
         ass = f"ass=filename={escape_filter_value(ass_file)}"
         if fonts_dir:
             ass += f":fontsdir={escape_filter_value(fonts_dir)}"
         video.append(ass)
     video.append("format=yuv420p")
-    graph = f"[0:v]{','.join(video)}[v]"
+    graph = f"{prefix}{','.join(video)}[v]"
     if has_audio:
         graph += f";[0:a]{loudnorm or LOUDNORM_SINGLE_PASS},aresample=48000[a]"
     return graph

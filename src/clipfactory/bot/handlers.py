@@ -23,7 +23,13 @@ from aiogram.types import (
     TelegramObject,
 )
 
-from clipfactory.bot.keyboards import campaigns_kb, clip_kb, parse_callback, retry_kb
+from clipfactory.bot.keyboards import (
+    campaigns_kb,
+    clip_kb,
+    discover_kb,
+    parse_callback,
+    retry_kb,
+)
 from clipfactory.bot.notify import TERMINAL, _html, clip_caption, progress_text, safe_error
 from clipfactory.config import ConfigError
 from clipfactory.db import NotFound
@@ -96,8 +102,10 @@ HELP = (
     "Потом выберите кампанию — я нарежу клипы и пришлю их на ревью.\n\n"
     "/jobs — последние job\n/status JOB_ID — статус и клипы\n"
     "/publish JOB_ID — запланировать и опубликовать одобренные клипы\n"
-    "/stats — просмотры и доход\n/cancel JOB_ID — остановить job"
+    "/stats — просмотры и доход\n/cancel JOB_ID — остановить job\n"
+    "/discover URL — видео канала/плейлиста по просмотрам, выбрать кнопкой"
 )
+DISCOVER_SHOW = 10
 
 
 @dataclass
@@ -106,6 +114,8 @@ class BotController:
     pending_source: dict[int, str] = field(default_factory=dict)
     pending_edit: dict[int, tuple[str, str]] = field(default_factory=dict)
     pending_crop: dict[int, tuple[str, str]] = field(default_factory=dict)
+    pending_discover: dict[int, list[str]] = field(default_factory=dict)
+    lister: Callable[[str, int], list[dict[str, Any]]] | None = None  # None — yt-dlp
 
     @property
     def review(self) -> ReviewService:
@@ -135,6 +145,37 @@ class BotController:
         if path.is_absolute() and path.is_file():
             return self.on_source(user_id, str(path))
         return [Reply("Не понял. " + HELP)]
+
+    def discover(self, user_id: int, url: str) -> list[Out]:
+        """Блокирующий (сеть): вызывать через asyncio.to_thread."""
+        from clipfactory.backends.downloader import DownloadError
+        from clipfactory.backends.downloader.discover import list_videos_ytdlp
+        from clipfactory.discover import discover
+
+        if not URL_RE.match(url):
+            return [Reply("Использование: /discover https://www.youtube.com/@канал/videos")]
+        try:
+            found = discover(
+                url, lister=self.lister or list_videos_ytdlp, seen=self.app.db.job_sources()
+            )[:DISCOVER_SHOW]
+        except DownloadError as e:
+            return [Reply(f"Не получилось: {safe_error(str(e))}")]
+        if not found:
+            return [Reply("Ничего подходящего (5 мин – 4 ч, ещё не обработанное).")]
+        self.pending_discover[user_id] = [c.url for c in found]
+        lines = [
+            f"{i}. {_html(c.title[:80])} — {discover_meta(c.view_count, c.duration)}"
+            for i, c in enumerate(found, 1)
+        ]
+        return [Reply("\n".join(lines) + "\n\nКакое нарезать?", discover_kb(len(found)))]
+
+    def _pick(self, user_id: int, index: str) -> list[Out]:
+        urls = self.pending_discover.get(user_id, [])
+        try:
+            url = urls[int(index) - 1]
+        except (ValueError, IndexError):
+            return [Reply("Список устарел — повторите /discover.")]
+        return self.on_source(user_id, url)
 
     def _apply_edit(self, user_id: int, text: str) -> list[Out]:
         job_id, clip_id = self.pending_edit.pop(user_id)
@@ -187,6 +228,8 @@ class BotController:
                 return self._retry(cb.job_id)
             if cb.kind == "clips":
                 return self.clip_cards(cb.job_id)
+            if cb.kind == "pick":
+                return self._pick(user_id, cb.value)
             return self._review(user_id, cb.action, cb.job_id, cb.clip_id)
         except (ReviewError, NotFound, ValueError, ConfigError) as e:
             return [Reply(f"Не получилось: {safe_error(str(e))}")]
@@ -412,6 +455,12 @@ def build_router(ctl: BotController, rt: Runtime, inbox: Path) -> Router:
         outs = await asyncio.to_thread(ctl.cancel, command.args.strip())
         await send_outs(bot, message.chat.id, outs, ctl, rt)
 
+    @router.message(Command("discover"))
+    async def _discover(message: Message, bot: Bot, command: CommandObject) -> None:
+        url = (command.args or "").strip()
+        outs = await asyncio.to_thread(ctl.discover, message.from_user.id, url)
+        await send_outs(bot, message.chat.id, outs, ctl, rt)
+
     @router.message(Command("stats"))
     async def _stats(message: Message, bot: Bot) -> None:
         await send_outs(bot, message.chat.id, await asyncio.to_thread(ctl.stats), ctl, rt)
@@ -455,6 +504,12 @@ def build_router(ctl: BotController, rt: Runtime, inbox: Path) -> Router:
         await send_outs(bot, chat_id, outs, ctl, rt)
 
     return router
+
+
+def discover_meta(views: int | None, duration: float | None) -> str:
+    v = "?" if views is None else (f"{views / 1e6:.1f}M" if views >= 1e6 else f"{views // 1000}K")
+    d = "?" if duration is None else f"{int(duration) // 60} мин"
+    return f"{v} просм., {d}"
 
 
 def source_kind(source: str) -> str:

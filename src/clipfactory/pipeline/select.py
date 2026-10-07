@@ -21,6 +21,7 @@ from clipfactory.log import get_logger
 from clipfactory.pipeline.context import NoHighlightsError, StageContext, ValidationFailed
 from clipfactory.schemas import (
     Campaign,
+    ChatActivity,
     ClipCandidate,
     Highlights,
     SelectionMode,
@@ -357,8 +358,9 @@ class SelectStage:
         keys = [ctx.key("transcript.json")]
         if ctx.campaign.selection is SelectionMode.signals:
             keys.append(ctx.key("audio.wav"))
-            if ctx.storage.exists(ctx.key("source.info.json")):
-                keys.append(ctx.key("source.info.json"))
+            for name in ("source.info.json", "chat.json"):
+                if ctx.storage.exists(ctx.key(name)):
+                    keys.append(ctx.key(name))
         return keys
 
     def run(self, ctx: StageContext) -> StageResult:
@@ -385,8 +387,12 @@ class SelectStage:
 
         info_key = ctx.key("source.info.json")
         info = ctx.read_model(info_key, SourceInfo) if ctx.storage.exists(info_key) else None
+        chat_key = ctx.key("chat.json")
+        chat = ctx.read_model(chat_key, ChatActivity) if ctx.storage.exists(chat_key) else None
         wav = ctx.local_path(ctx.key("audio.wav"))
-        sig = signals.build_signals(wav, info)
+        sig = signals.build_signals(wav, info, chat=chat)
+        trace_key = ctx.key("signals.json")
+        ctx.write_model(trace_key, signals.trace(sig))  # и при неудаче: видно, почему пусто
         duration = transcript.duration or sig.length * sig.hop
         picked = signals.pick_windows(
             sig, ctx.campaign, duration, words=transcript.words, info=info
@@ -402,7 +408,7 @@ class SelectStage:
         ctx.write_model(key, Highlights(candidates=candidates))
         return StageResult(
             stage=self.name,
-            outputs=[key],
+            outputs=[key, trace_key],
             info={"clips": len(candidates), "signals": sorted(sig.series)},
         )
 

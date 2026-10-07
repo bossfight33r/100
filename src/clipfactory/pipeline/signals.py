@@ -2,7 +2,8 @@
 
 Каждый сигнал — ряд оценок 0..1 с шагом HOP секунд:
 - audio: всплеск громкости относительно локальной базы (выстрелы, крик, рёв зала);
-- heatmap: YouTube «Most replayed» — где зрители пересматривают.
+- heatmap: YouTube «Most replayed» — где зрители пересматривают;
+- chat: всплеск сообщений в чате записи стрима, сдвинутый на задержку реакции (ADR-0016).
 Ряды смешиваются с весами доступных сигналов, вокруг пиков строятся окна
 длиной target, пик кладётся ближе к концу окна (развязка после завязки).
 """
@@ -16,9 +17,16 @@ from pathlib import Path
 
 import numpy as np
 
-from clipfactory.schemas import Campaign, ClipCandidate, SourceInfo, Word
+from clipfactory.schemas import (
+    Campaign,
+    ChatActivity,
+    ClipCandidate,
+    SignalsTrace,
+    SourceInfo,
+    Word,
+)
 
-SIGNALS_VERSION = 1
+SIGNALS_VERSION = 3
 HOP = 0.5  # сек на точку ряда
 BASELINE_SEC = 60.0  # окно скользящей медианы громкости
 SMOOTH_SEC = 2.0  # сглаживание: одиночный щелчок — не момент
@@ -27,7 +35,11 @@ AUDIO_DEADBAND_DB = 1.5  # колебания фона — не всплеск
 SILENCE_DB = -70.0
 PEAK_POSITION = 0.65  # где в окне клипа стоит пик
 MIN_PEAK = 0.08  # ниже — фон, а не момент
-WEIGHTS = {"heatmap": 0.6, "audio": 0.4}
+WEIGHTS = {"heatmap": 0.6, "chat": 0.5, "audio": 0.4}
+CHAT_LAG_SEC = 6.0  # зрители пишут после момента
+CHAT_SMOOTH_SEC = 6.0
+CHAT_BASELINE_SEC = 120.0
+CHAT_MIN_MESSAGES = 50  # меньше — шум, а не сигнал
 WORD_PAD = 0.1
 
 
@@ -115,18 +127,66 @@ def heatmap_scores(info: SourceInfo, length: int, hop: float = HOP) -> np.ndarra
     return np.clip((raw - med) / (top - med), 0.0, 1.0)
 
 
-def build_signals(wav_path: Path | None, info: SourceInfo | None, hop: float = HOP) -> Signals:
+def chat_scores(chat: ChatActivity, length: int, hop: float = HOP) -> np.ndarray | None:
+    """Темп чата над скользящей медианой, сдвинутый раньше на CHAT_LAG_SEC; 0..1."""
+    counts = np.asarray(chat.counts, dtype=np.float64)
+    if length == 0 or counts.sum() < CHAT_MIN_MESSAGES:
+        return None
+    rate = counts / chat.hop
+    t = (np.arange(length) + 0.5) * hop + CHAT_LAG_SEC  # реакция на момент t — в t + лаг
+    idx = np.minimum((t / chat.hop).astype(int), len(rate) - 1)
+    series = rate[idx]
+    series[t >= len(rate) * chat.hop] = 0.0
+    smooth = _moving(np.mean, series, max(int(CHAT_SMOOTH_SEC / hop), 1))
+    baseline = _moving(np.median, smooth, int(CHAT_BASELINE_SEC / hop) | 1)
+    excess = smooth - baseline
+    positive = excess[excess > 0]
+    if positive.size == 0:
+        return None
+    scale = float(np.percentile(positive, 95))
+    return np.clip(excess / scale, 0.0, 1.0) if scale > 0 else None
+
+
+def build_signals(
+    wav_path: Path | None,
+    info: SourceInfo | None,
+    hop: float = HOP,
+    chat: ChatActivity | None = None,
+) -> Signals:
     series: dict[str, np.ndarray] = {}
     if wav_path is not None:
         series["audio"] = audio_scores(rms_db(wav_path, hop), hop)
     length = len(series["audio"]) if series else 0
+    if not length and info is not None and info.duration:
+        length = int(info.duration / hop)
     if info is not None:
-        if not length and info.duration:
-            length = int(info.duration / hop)
         hm = heatmap_scores(info, length, hop)
         if hm is not None:
             series["heatmap"] = hm
+    if chat is not None:
+        cs = chat_scores(chat, length, hop)
+        if cs is not None:
+            series["chat"] = cs
     return Signals(hop=hop, series=series)
+
+
+def trace(sig: Signals, step: float = 1.0, weights: dict[str, float] = WEIGHTS) -> SignalsTrace:
+    """Ряды с шагом step (максимум внутри шага), 3 знака — компактно для signals.json."""
+    k = max(int(round(step / sig.hop)), 1)
+
+    def down(x: np.ndarray) -> list[float]:
+        if x.size == 0:
+            return []
+        pad = (-len(x)) % k
+        padded = np.pad(x, (0, pad), mode="edge") if pad else x
+        return [round(float(v), 3) for v in padded.reshape(-1, k).max(axis=1)]
+
+    return SignalsTrace(
+        hop=sig.hop * k,
+        weights={n: weights.get(n, 0.0) for n in sig.series},
+        series={n: down(s) for n, s in sorted(sig.series.items())},
+        fused=down(sig.fused(weights)),
+    )
 
 
 # ---------------------------------------------------------------- windows

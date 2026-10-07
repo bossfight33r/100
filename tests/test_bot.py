@@ -221,3 +221,36 @@ def test_local_bot_api_session(tmp_path):
     session = build_session(app.settings)
     assert session.api.is_local is True
     assert session.api.api_url("T", "getMe").startswith("http://localhost:8081/bot")
+
+
+def test_discover_list_pick_and_campaign(tmp_path):
+    from clipfactory.backends.downloader import DownloadError
+
+    app = make_fast_app(tmp_path, admin_ids=[ADMIN])
+    entries = [
+        {"id": f"v{i}", "ie_key": "Youtube", "title": f"<b>Клатч {i}</b>",
+         "duration": 600 + i, "view_count": 1000 * i}
+        for i in range(1, 13)
+    ]  # fmt: skip
+    ctl = BotController(app, lister=lambda url, limit: entries[:limit])
+    [r] = ctl.discover(ADMIN, "https://www.youtube.com/@esl/videos")
+    assert r.text.startswith("1. &lt;b&gt;Клатч 12") and "12K просм., 10 мин" in r.text
+    assert sum(len(row) for row in r.keyboard.inline_keyboard) == 10
+    [r] = ctl.on_callback(ADMIN, "pick:2")
+    assert "кампанию" in r.text
+    assert ctl.pending_source[ADMIN] == "https://www.youtube.com/watch?v=v11"
+    outs = ctl.on_callback(ADMIN, "camp:fast")
+    assert isinstance(outs[1], TrackJob)
+    assert ctl.on_callback(ADMIN, "pick:99")[0].text.startswith("Список устарел")
+    assert ctl.on_callback(STRANGER, "pick:1")[0].text.startswith("Список устарел")
+    # уже поставленное больше не предлагается
+    [r] = ctl.discover(ADMIN, "https://www.youtube.com/@esl/videos")
+    assert "Клатч 11" not in r.text
+    assert "Использование" in ctl.discover(ADMIN, "не ссылка")[0].text
+
+    def broken(url, limit):
+        raise DownloadError("HTTP 404")
+
+    ctl = BotController(app, lister=broken)
+    assert ctl.discover(ADMIN, "https://x.example/c")[0].text.startswith("Не получилось")
+    assert parse_callback("pick:3").value == "3" and parse_callback("pick:x") is None

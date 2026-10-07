@@ -13,17 +13,23 @@ from clipfactory.backends.downloader import (
     download_http,
     download_ytdlp,
 )
+from clipfactory.backends.downloader.live_chat import (
+    ChatFetcher,
+    fetch_live_chat_ytdlp,
+    parse_live_chat,
+)
 from clipfactory.log import get_logger
 from clipfactory.media import ffmpeg
 from clipfactory.media.models import MediaInfo
 from clipfactory.media.probe import ProbeError, probe
 from clipfactory.pipeline.context import SourceError, StageContext, ValidationFailed
-from clipfactory.schemas import SourceInfo, StageName, StageResult
+from clipfactory.schemas import ChatActivity, SelectionMode, SourceInfo, StageName, StageResult
 from clipfactory.storage.local import sha256_file
 
 log = get_logger(__name__)
 
 PLAYLIST_FORMATS = {"hls", "applehttp", "concat", "ffconcat", "dash"}
+CHAT_HOP = 1.0
 DIRECT_MEDIA_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 MP4_FAMILY = {"mov", "mp4", "m4a", "3gp", "3g2", "mj2"}
 MP4_VIDEO_CODECS = {"h264", "hevc", "av1", "mpeg4"}
@@ -51,12 +57,21 @@ class IngestStage:
         self,
         http_downloader: Downloader = download_http,
         ytdlp_downloader: Downloader = download_ytdlp,
+        chat_fetcher: ChatFetcher = fetch_live_chat_ytdlp,
     ) -> None:
         self.http_downloader = http_downloader
         self.ytdlp_downloader = ytdlp_downloader
+        self.chat_fetcher = chat_fetcher
+
+    @staticmethod
+    def wants_chat(ctx: StageContext) -> bool:
+        return ctx.campaign.selection is SelectionMode.signals
 
     def config(self, ctx: StageContext) -> dict[str, Any]:
-        return {"source": ctx.job.source}
+        cfg: dict[str, Any] = {"source": ctx.job.source}
+        if self.wants_chat(ctx):  # ключ только для signals: кеш прежних job не меняется
+            cfg["chat"] = True
+        return cfg
 
     def input_keys(self, ctx: StageContext) -> list[str]:
         return []
@@ -130,9 +145,12 @@ class IngestStage:
             ctx.storage.put_file(out_key, fetched)
 
         outputs = [out_key]
-        info_key = self._store_source_info(ctx)
-        if info_key:
-            outputs.append(info_key)
+        source_info = self._store_source_info(ctx)
+        if source_info is not None:
+            outputs.append(ctx.key("source.info.json"))
+        chat_key = self._store_chat(ctx, source_info, info.duration)
+        if chat_key:
+            outputs.append(chat_key)
         return StageResult(
             stage=self.name,
             outputs=outputs,
@@ -148,7 +166,7 @@ class IngestStage:
             },
         )
 
-    def _store_source_info(self, ctx: StageContext) -> str | None:
+    def _store_source_info(self, ctx: StageContext) -> SourceInfo | None:
         """source.info.json от загрузчика (heatmap, главы) — необязательный выход."""
         raw = ctx.scratch / "download" / SOURCE_INFO_NAME
         key = ctx.key("source.info.json")
@@ -162,6 +180,31 @@ class IngestStage:
             return None
         ctx.write_model(key, info)
         log.info("ingest.source_info", job_id=ctx.job.id, heatmap_points=len(info.heatmap))
+        return info
+
+    def _store_chat(
+        self, ctx: StageContext, info: SourceInfo | None, duration: float
+    ) -> str | None:
+        """Чат записи стрима — лучшее усилие: без него ingest всё равно успешен."""
+        key = ctx.key("chat.json")
+        ctx.storage.delete(key)
+        if info is None or not info.was_live or not self.wants_chat(ctx):
+            return None
+        chat_dir = ctx.scratch / "chat"
+        chat_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            path = self.chat_fetcher(ctx.job.source, chat_dir)
+        except DownloadError as e:
+            log.warning("ingest.chat_failed", job_id=ctx.job.id, error=str(e)[:200])
+            return None
+        if path is None:
+            return None
+        with path.open(encoding="utf-8", errors="replace") as f:
+            counts = parse_live_chat(f, duration, hop=CHAT_HOP)
+        if not any(counts):
+            return None
+        ctx.write_model(key, ChatActivity(hop=CHAT_HOP, counts=counts))
+        log.info("ingest.chat", job_id=ctx.job.id, messages=sum(counts))
         return key
 
     def validate(self, ctx: StageContext, outputs: list[str]) -> None:

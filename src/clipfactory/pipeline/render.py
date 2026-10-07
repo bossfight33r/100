@@ -30,6 +30,7 @@ from clipfactory.schemas import (
     ClipCandidate,
     ClipMeta,
     Highlights,
+    Layout,
     Platform,
     PlatformClipMeta,
     ReframePlan,
@@ -200,12 +201,21 @@ class RenderStage:
             return None
         return old.platforms if old.meta_hash == meta_hash else None
 
+    @staticmethod
+    def layout_config(ctx: StageContext) -> dict[str, Any]:
+        """Только для не-дефолтной раскладки: кеш прежних клипов не инвалидируется."""
+        c = ctx.campaign
+        if c.layout is Layout.crop:
+            return {}
+        return {"layout": c.layout.value, "fit_zoom": c.fit_zoom}
+
     def config(self, ctx: StageContext) -> dict[str, Any]:
         enc = ctx.backends.encoder
         return {
             "encoder": enc.video_args(fps=ctx.settings.output_fps),
             "fps": ctx.settings.output_fps,
             "fonts_dir": str(ctx.settings.caption_fonts_dir or ""),
+            **self.layout_config(ctx),
             **self.meta_config(ctx),
         }
 
@@ -239,6 +249,7 @@ class RenderStage:
                 captions=ctx.storage.checksum(ctx.clip_key(cand.id, "captions.ass")),
                 encoder=encoder.video_args(fps=fps), fps=fps,
                 fonts_dir=str(ctx.settings.caption_fonts_dir or ""),
+                **self.layout_config(ctx),
             )  # fmt: skip
             if clipcache.reusable(ctx, self.name.value, cand.id, fp) is not None:
                 reused += 1
@@ -296,6 +307,9 @@ class RenderStage:
             if ctx.settings.caption_fonts_dir
             else None,
             has_audio=has_audio,
+            fit=(plan.source_width, plan.source_height, ctx.campaign.fit_zoom)
+            if ctx.campaign.layout is Layout.fit_blur
+            else None,
         )
         video_key = ctx.clip_key(cand.id, "final.mp4")
         tmp_video = clip_dir / ".final.tmp.mp4"

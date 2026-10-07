@@ -17,15 +17,15 @@
 
 ## Что работает
 
-- **CLI**: `capabilities`, `run`, `status`, `enqueue`, `retry`, `cancel`, `worker`, `review` (approve/reject/edit/captions/crop), `auth youtube`, `publish` (`--retry-failed`), `track` (`--every`), `report`, `bot`; флаги `--json`, `--verbose`, `--force-stage`, `--no-cache`.
+- **CLI**: `capabilities`, `discover`, `signals`, `run`, `status`, `enqueue`, `retry`, `cancel`, `worker`, `review` (approve/reject/edit/captions/crop), `auth youtube`, `publish` (`--retry-failed`), `track` (`--every`), `report`, `bot`; флаги `--json`, `--verbose`, `--force-stage`, `--no-cache`.
 - **Pipeline**: ingest (файл/HTTP/yt-dlp, remux без перекодирования) → transcribe (mlx/faster-whisper, пословно) → select (Claude, чанки 20 мин/60 с, подгонка по словам и паузам) → reframe (MediaPipe + смены сцен, гистерезис, кусочно-постоянный кроп) → captions (ASS, подсветка слова, safe zone) → render (один ffmpeg, 1080x1920, loudnorm, H.264/AAC, валидация ffprobe) → meta.json по платформам.
 - **Надёжность**: манифесты и кеш по хешам, кеш на уровне клипа (правка одного клипа не перекодирует остальные), resume/retry с первого невалидного этапа, отмена идущей job, stage_runs, миграции схемы БД, RQ + SimpleWorker, защита от дублей задач, восстановление job из SQLite после падения воркера/потери Redis.
 - **Ревью**: approve/reject/edit metadata/rerender captions/crop, журнал review_actions; метаданные переиспользуются при перерендере.
-- **Бот**: ADMIN_IDS, файл/URL/путь, выбор кампании, прогресс одним сообщением, карточки клипов, кнопки ревью, retry, `/jobs`, `/status`, `/publish`, `/stats`, `/cancel`; локальный Bot API server (`CF_TELEGRAM_API_URL`) для файлов до 2 ГБ.
+- **Бот**: ADMIN_IDS, файл/URL/путь, выбор кампании, прогресс одним сообщением, карточки клипов, кнопки ревью, retry, `/jobs`, `/status`, `/publish`, `/stats`, `/cancel`, `/discover`; локальный Bot API server (`CF_TELEGRAM_API_URL`) для файлов до 2 ГБ.
 - **Публикация**: scheduler (окна, timezone, daily_limit, DST), YouTube resumable upload + publishAt, перенос прошедшего слота, export-пакеты TikTok/Instagram, rejected не публикуются; прерванная загрузка не повторяется автоматически (лиза 30 мин, затем `--retry-failed` после проверки канала).
 - **Статистика/доход**: YouTube collector, ручной ввод, append-only снимки, earnings-стратегия, отчёты, аналитика хуков, файл рекомендаций к промпту.
 - **Перенос на сервер**: S3/MinIO, NVENC (только если реально кодирует), Ollama, маршрутизация задач по тегам воркеров, PostgreSQL с пулом — ADR-0011…0013, см. README «Перенос на сервер» и runbook «Несколько машин».
-- **Игры/стримы** (ADR-0014): `selection: signals` — моменты по пикам звука и YouTube «Most replayed» без Whisper и без LLM-выбора; кампания `cs2`. Проверка LLM-настроек до старта job.
+- **Игры/стримы** (ADR-0014): `selection: signals` — моменты по пикам звука и YouTube «Most replayed» без Whisper и без LLM-выбора; кампания `cs2`. Проверка LLM-настроек до старта job. Раскладка `layout: fit_blur` — весь кадр + размытый фон (ADR-0015). `cf discover` — поиск исходников по каналу/плейлисту. Сигнал чата записи стрима (ADR-0016). `cf signals JOB_ID` — графики сигналов в терминале.
 - Три прохода независимого code review: 30 находок, все закрыты; security review — HIGH/MEDIUM нет (подробно — CHANGELOG).
 - Адаптеры faster-whisper, mlx, Anthropic, YouTube протестированы на настоящих типах/исключениях библиотек.
 - Проверено в Linux-контейнере: реальный ffmpeg-рендер, реальный MediaPipe (нужны `libegl1 libgles2`), реальный redis-server + `cf worker`.
@@ -99,7 +99,7 @@ CF_QUEUE=rq .venv/bin/cf enqueue ~/Movies/sample.mp4 -c example && CF_QUEUE=rq .
 
 ## Следующий шаг
 
-**Сначала (Босс на Маке):** кс-видео по ссылке с YouTube → `.venv/bin/cf run "URL" --campaign cs2`; проверить, что `data/jobs/<id>/source.info.json` содержит `heatmap` (у видео с малым числом просмотров его нет — тогда работает только звук), и что моменты попадают в клатчи/реакции. По результату — подстроить `WEIGHTS`, `PEAK_POSITION`, `target_duration` в `pipeline/signals.py`. Прошлый 25-минутный прогон `20261006-110014-d07406`: Gemini-строки в `.env`, затем `cf retry` (Whisper из кеша).
+**Сначала (Босс на Маке):** `.venv/bin/cf discover "https://www.youtube.com/@<канал>/videos" --heatmap` → выбрать кс-видео → `.venv/bin/cf run "URL" --campaign cs2`; проверить, что `data/jobs/<id>/source.info.json` содержит `heatmap` (у видео с малым числом просмотров его нет — тогда работает только звук), и что моменты попадают в клатчи/реакции. По результату (`cf signals <JOB_ID>` — видно, какой сигнал что выбрал) — подстроить `WEIGHTS`, `PEAK_POSITION`, `target_duration` в `pipeline/signals.py`. Прошлый 25-минутный прогон `20261006-110014-d07406`: Gemini-строки в `.env`, затем `cf retry` (Whisper из кеша).
 
 
 Все фазы 0–5 по ТЗ и раздел «Дальше» (перенос на сервер) выполнены. Дальше — пройти чеклист «Проверить на Маке» и исправить найденное на реальных бэкендах (в первую очередь: качество выбора моментов на реальном Claude, параметры гистерезиса кропа `ReframeParams`, размер шрифта субтитров `CF_CAPTION_FONT_SIZE`). Remote compute и улучшения из раздела README «Дальше» — только по решению Босса.

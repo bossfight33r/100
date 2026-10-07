@@ -344,6 +344,12 @@ class Database:
             rows = c.execute(q, (*args, limit)).fetchall()
         return [self._job(r) for r in rows]
 
+    def job_sources(self) -> set[str]:
+        """Источники всех job — чтобы `cf discover` не предлагал уже обработанное."""
+        with self.connect() as c:
+            rows = c.execute("SELECT DISTINCT source FROM jobs").fetchall()
+        return {r["source"] for r in rows}
+
     def set_job_status(self, job_id: str, status: JobStatus) -> None:
         with self.connect() as c:
             c.execute(
