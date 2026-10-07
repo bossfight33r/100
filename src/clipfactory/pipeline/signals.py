@@ -189,6 +189,54 @@ def trace(sig: Signals, step: float = 1.0, weights: dict[str, float] = WEIGHTS) 
     )
 
 
+def peaks(
+    sig: Signals,
+    start: float = 0.0,
+    end: float = float("inf"),
+    *,
+    max_n: int = 8,
+    min_gap: float = 20.0,
+    weights: dict[str, float] = WEIGHTS,
+) -> list[tuple[float, float, str]]:
+    """Пики итогового ряда в [start, end): (время, сила 0..1, ведущий сигнал)."""
+    fused = sig.fused(weights)
+    if fused.size == 0:
+        return []
+    a = max(int(start / sig.hop), 0)
+    b = min(int(end / sig.hop) if end != float("inf") else fused.size, fused.size)
+    work = fused[a:b].copy()
+    gap = max(int(min_gap / sig.hop), 1)
+    out = []
+    while len(out) < max_n and work.size:
+        i = int(np.argmax(work))
+        v = float(work[i])
+        if v < MIN_PEAK:
+            break
+        idx = a + i
+        lead = max(sig.series, key=lambda k: weights.get(k, 0.0) * float(sig.series[k][idx]))
+        out.append(((idx + 0.5) * sig.hop, v, lead))
+        work[max(i - gap, 0) : i + gap] = -1.0
+    return sorted(out)
+
+
+def window_strength(
+    sig: Signals, start: float, end: float, weights: dict[str, float] = WEIGHTS
+) -> float:
+    """Сила сигналов внутри клипа 0..1: 0.7·пик + 0.3·среднее, по максимуму ряда."""
+    fused = sig.fused(weights)
+    if fused.size == 0:
+        return 0.0
+    best = float(fused.max())
+    if best <= 0:
+        return 0.0
+    a = max(int(start / sig.hop), 0)
+    b = max(min(int(np.ceil(end / sig.hop)), fused.size), a + 1)
+    w = fused[a:b]
+    if w.size == 0:
+        return 0.0
+    return (0.7 * float(w.max()) + 0.3 * float(w.mean())) / best
+
+
 # ---------------------------------------------------------------- windows
 
 

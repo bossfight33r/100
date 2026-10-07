@@ -103,6 +103,7 @@ class Account(_Model):
 class SelectionMode(StrEnum):
     transcript = "transcript"  # LLM по тексту речи (подкасты, интервью)
     signals = "signals"  # пики звука и YouTube «Most replayed» (игры, стримы) — ADR-0014
+    hybrid = "hybrid"  # LLM по речи + подсказки пиков сигналов и их вес в оценке — ADR-0017
 
 
 class Layout(StrEnum):
@@ -128,12 +129,13 @@ class Campaign(_Model):
     transcribe: bool = True  # False — без Whisper и без субтитров (только для selection: signals)
     layout: Layout = Layout.crop
     fit_zoom: float = Field(default=1.0, ge=1.0, le=2.0)  # fit_blur: >1 — крупнее, края срезаются
+    title_overlay: bool = False  # заголовок клипа крупно сверху кадра (игровые shorts)
 
     @model_validator(mode="after")
     def _durations(self) -> Campaign:
         if self.clip_min_sec > self.clip_max_sec:
             raise ValueError("clip_min_sec must be <= clip_max_sec")
-        if not self.transcribe and self.selection is SelectionMode.transcript:
+        if not self.transcribe and self.selection is not SelectionMode.signals:
             raise ValueError("transcribe: false requires selection: signals")
         return self
 
@@ -181,6 +183,25 @@ class ChatActivity(_Model):
 
     hop: float = Field(gt=0)
     counts: list[int]
+
+
+class WatchSource(_Model):
+    """config/watch.yaml: канал/плейлист, новые видео которого сами идут в нарезку (cf watch)."""
+
+    url: str
+    campaign: str
+    min_views: int = Field(default=0, ge=0)
+    max_new: int = Field(default=3, ge=1)  # сколько новых видео ставить за одну проверку
+    min_minutes: float = Field(default=5, ge=0)
+    max_minutes: float = Field(default=240, gt=0)
+    limit: int = Field(default=15, ge=1, le=200)  # сколько последних видео смотреть
+
+    @field_validator("url")
+    @classmethod
+    def _http(cls, v: str) -> str:
+        if not re.match(r"^https?://\S+$", v):
+            raise ValueError("url must be http(s)")
+        return v
 
 
 class SourceCandidate(_Model):

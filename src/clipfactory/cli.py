@@ -506,6 +506,55 @@ def track(
 
 
 @app.command()
+def watch(
+    every: Annotated[
+        str | None, typer.Option("--every", help="Проверять периодически: 30m, 6h, 1d")
+    ] = None,
+) -> None:
+    """Новые видео каналов из config/watch.yaml — в нарезку (без --every — одна проверка)."""
+    import time
+
+    from clipfactory.backends.downloader.discover import list_videos_ytdlp
+    from clipfactory.config import ConfigError, load_watch
+    from clipfactory.watch import check_all
+
+    app_ = _app()
+    path = app_.settings.watch_file
+    try:
+        sources = load_watch(path)
+    except ConfigError as e:
+        _fail(str(e))
+    if not sources:
+        _fail(f"{path}: нет источников (шаблон — config/watch.example.yaml)")
+    interval = parse_interval(every) if every else None
+
+    def once() -> None:
+        stamp = time.strftime("%Y-%m-%d %H:%M")
+        results = check_all(app_, sources, list_videos_ytdlp)
+        if _state["json"]:
+            _out([{"url": r.source.url, "queued": r.queued, "error": r.error} for r in results])
+            return
+        for r in results:
+            if r.error:
+                typer.secho(f"{stamp} {r.source.url}: {r.error}", fg=typer.colors.YELLOW)
+            else:
+                typer.echo(f"{stamp} {r.source.url}: новых {len(r.queued)}")
+            for job_id, url in r.queued:
+                typer.echo(f"    {job_id}  {url}")
+
+    if interval is None:
+        once()
+        return
+    typer.echo(f"Проверка каналов каждые {every}; Ctrl+C — стоп")
+    try:
+        while True:
+            once()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        typer.echo("Остановлено.")
+
+
+@app.command()
 def report(
     campaign: Annotated[str | None, typer.Option("--campaign", "-c")] = None,
     top: Annotated[int, typer.Option("--top", min=1)] = 10,

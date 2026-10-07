@@ -11,6 +11,7 @@ selection: signals            # пики звука + YouTube «Most replayed» 
 transcribe: false             # без Whisper и субтитров; true — субтитры, если стример говорит
 layout: fit_blur              # весь кадр 16:9 по центру + размытый фон; crop — кроп 9:16
 fit_zoom: 1.0                 # 1.0 — видно всё (радар, килфид); 1.2–1.4 — крупнее, края режутся
+title_overlay: true           # заголовок от LLM крупно сверху, в размытой полосе
 must_include_tags: ["#shorts", "#cs2"]
 forbidden: ["казино", "ставки", "кейсы за донат"]
 notes: |

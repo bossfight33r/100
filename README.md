@@ -53,6 +53,7 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 | `cf run SOURCE --campaign ID` | синхронно выполнить весь pipeline (файл или URL) |
 | `cf status JOB_ID` | статус job, упавший этап, этапы (cache/completed), клипы |
 | `cf discover URL [--heatmap] [--enqueue N -c ID]` | найти исходники: видео канала/плейлиста по просмотрам (без скачивания), фильтр длительности, уже обработанные скрыты; `--heatmap` — проверить «Most replayed»; `--enqueue` — поставить N лучших в очередь |
+| `cf watch [--every 6h]` | каналы из `config/watch.yaml` (шаблон `watch.example.yaml`): новые видео с нужными просмотрами сами ставятся в нарезку; уже обработанные не повторяются |
 | `cf signals JOB_ID` | ряды сигналов (звук, heatmap, чат) и выбранные клипы на одной шкале в терминале — для подстройки весов |
 | `cf enqueue SOURCE --campaign ID` | создать job и поставить в очередь (`CF_QUEUE=rq`) |
 | `cf retry JOB_ID [--force-stage STAGE]` | повторить с первого невалидного этапа |

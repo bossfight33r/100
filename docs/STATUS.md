@@ -17,7 +17,7 @@
 
 ## Что работает
 
-- **CLI**: `capabilities`, `discover`, `signals`, `run`, `status`, `enqueue`, `retry`, `cancel`, `worker`, `review` (approve/reject/edit/captions/crop), `auth youtube`, `publish` (`--retry-failed`), `track` (`--every`), `report`, `bot`; флаги `--json`, `--verbose`, `--force-stage`, `--no-cache`.
+- **CLI**: `capabilities`, `discover`, `watch`, `signals`, `run`, `status`, `enqueue`, `retry`, `cancel`, `worker`, `review` (approve/reject/edit/captions/crop), `auth youtube`, `publish` (`--retry-failed`), `track` (`--every`), `report`, `bot`; флаги `--json`, `--verbose`, `--force-stage`, `--no-cache`.
 - **Pipeline**: ingest (файл/HTTP/yt-dlp, remux без перекодирования) → transcribe (mlx/faster-whisper, пословно) → select (Claude, чанки 20 мин/60 с, подгонка по словам и паузам) → reframe (MediaPipe + смены сцен, гистерезис, кусочно-постоянный кроп) → captions (ASS, подсветка слова, safe zone) → render (один ffmpeg, 1080x1920, loudnorm, H.264/AAC, валидация ffprobe) → meta.json по платформам.
 - **Надёжность**: манифесты и кеш по хешам, кеш на уровне клипа (правка одного клипа не перекодирует остальные), resume/retry с первого невалидного этапа, отмена идущей job, stage_runs, миграции схемы БД, RQ + SimpleWorker, защита от дублей задач, восстановление job из SQLite после падения воркера/потери Redis.
 - **Ревью**: approve/reject/edit metadata/rerender captions/crop, журнал review_actions; метаданные переиспользуются при перерендере.
@@ -25,7 +25,7 @@
 - **Публикация**: scheduler (окна, timezone, daily_limit, DST), YouTube resumable upload + publishAt, перенос прошедшего слота, export-пакеты TikTok/Instagram, rejected не публикуются; прерванная загрузка не повторяется автоматически (лиза 30 мин, затем `--retry-failed` после проверки канала).
 - **Статистика/доход**: YouTube collector, ручной ввод, append-only снимки, earnings-стратегия, отчёты, аналитика хуков, файл рекомендаций к промпту.
 - **Перенос на сервер**: S3/MinIO, NVENC (только если реально кодирует), Ollama, маршрутизация задач по тегам воркеров, PostgreSQL с пулом — ADR-0011…0013, см. README «Перенос на сервер» и runbook «Несколько машин».
-- **Игры/стримы** (ADR-0014): `selection: signals` — моменты по пикам звука и YouTube «Most replayed» без Whisper и без LLM-выбора; кампания `cs2`. Проверка LLM-настроек до старта job. Раскладка `layout: fit_blur` — весь кадр + размытый фон (ADR-0015). `cf discover` — поиск исходников по каналу/плейлисту. Сигнал чата записи стрима (ADR-0016). `cf signals JOB_ID` — графики сигналов в терминале.
+- **Игры/стримы** (ADR-0014): `selection: signals` — моменты по пикам звука и YouTube «Most replayed» без Whisper и без LLM-выбора; кампания `cs2`. Проверка LLM-настроек до старта job. Раскладка `layout: fit_blur` — весь кадр + размытый фон (ADR-0015). `cf discover` — поиск исходников по каналу/плейлисту. Сигнал чата записи стрима (ADR-0016). `cf signals JOB_ID` — графики сигналов в терминале. `title_overlay` — заголовок крупно сверху клипа. `cf watch` — каналы из `config/watch.yaml` нарезаются автоматически. `selection: hybrid` — речь + сигналы (ADR-0017).
 - Три прохода независимого code review: 30 находок, все закрыты; security review — HIGH/MEDIUM нет (подробно — CHANGELOG).
 - Адаптеры faster-whisper, mlx, Anthropic, YouTube протестированы на настоящих типах/исключениях библиотек.
 - Проверено в Linux-контейнере: реальный ffmpeg-рендер, реальный MediaPipe (нужны `libegl1 libgles2`), реальный redis-server + `cf worker`.

@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
@@ -33,6 +35,28 @@ def escape_ass(text: str) -> str:
     """Нейтрализовать управляющие символы ASS: override-блоки и \\N/\\h-последовательности."""
     text = text.replace("\\", "＼").replace("{", "｛").replace("}", "｝")
     return " ".join(text.split())
+
+
+TITLE_MAX_CHARS = 60
+_HASHTAG = re.compile(r"#\w+", re.UNICODE)
+
+
+def overlay_text(title: str) -> str:
+    """Текст заголовка поверх видео: без хэштегов и эмодзи (libass не рисует цветные)."""
+    text = _HASHTAG.sub("", title)
+    text = "".join(ch for ch in text if ord(ch) <= 0xFFFF and unicodedata.category(ch) != "So")
+    text = " ".join(text.split())
+    if len(text) > TITLE_MAX_CHARS:
+        text = text[: TITLE_MAX_CHARS - 1].rsplit(" ", 1)[0].rstrip(",.:;—-") + "…"
+    return text
+
+
+def title_event(text: str, duration: float, y: int, size: int = 78) -> str:
+    """Dialogue ASS: заголовок по центру по горизонтали, на высоте y, весь клип."""
+    tags = f"{{\\an5\\pos({PLAY_W // 2},{y})\\fs{size}\\b1\\bord7\\shad0}}"
+    return (
+        f"Dialogue: 1,{ass_time(0)},{ass_time(duration)},Default,,0,0,0,,{tags}{escape_ass(text)}"
+    )
 
 
 def ass_time(t: float) -> str:

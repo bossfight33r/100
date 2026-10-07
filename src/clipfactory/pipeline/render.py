@@ -16,6 +16,7 @@ from clipfactory.backends.llm.base import LLMError, parse_json_loose
 from clipfactory.log import get_logger
 from clipfactory.media import ffmpeg
 from clipfactory.media.filters import (
+    fit_dims,
     loudnorm_apply_filter,
     loudnorm_measure_filter,
     parse_loudnorm_json,
@@ -23,6 +24,7 @@ from clipfactory.media.filters import (
 )
 from clipfactory.media.probe import ProbeError, probe
 from clipfactory.pipeline import clipcache
+from clipfactory.pipeline.captions import overlay_text, title_event
 from clipfactory.pipeline.context import StageContext, ValidationFailed, config_hash
 from clipfactory.pipeline.select import load_prompt
 from clipfactory.schemas import (
@@ -243,6 +245,9 @@ class RenderStage:
                 raise ffmpeg.FFmpegCancelled("render cancelled")
             video_key = ctx.clip_key(cand.id, "final.mp4")
             thumb_key = ctx.clip_key(cand.id, "thumb.jpg")
+            # метаданные до видео: заголовок может выжигаться в кадр (title_overlay)
+            meta_key, metas = self._write_meta(ctx, cand, transcript)
+            title = self.overlay_title(ctx, metas)
             fp = clipcache.fingerprint(
                 v=self.version, source=source_sha, start=cand.start, end=cand.end,
                 reframe=ctx.storage.checksum(ctx.clip_key(cand.id, "reframe.json")),
@@ -250,13 +255,13 @@ class RenderStage:
                 encoder=encoder.video_args(fps=fps), fps=fps,
                 fonts_dir=str(ctx.settings.caption_fonts_dir or ""),
                 **self.layout_config(ctx),
+                **({"title": title} if title else {}),
             )  # fmt: skip
             if clipcache.reusable(ctx, self.name.value, cand.id, fp) is not None:
                 reused += 1
             else:
-                self._render_clip(ctx, cand, src, has_audio, fps, encoder)
+                self._render_clip(ctx, cand, src, has_audio, fps, encoder, title)
                 clipcache.record(ctx, self.name.value, cand.id, fp, [video_key, thumb_key])
-            meta_key = self._write_meta(ctx, cand, transcript)
             outputs += [video_key, thumb_key, meta_key]
         return StageResult(
             stage=self.name, outputs=outputs, info={"encoder": encoder.name, "clips_reused": reused}
@@ -286,10 +291,22 @@ class RenderStage:
         has_audio: bool,
         fps: int,
         encoder: Any,
+        title: str | None = None,
     ) -> None:
         plan = ctx.read_model(ctx.clip_key(cand.id, "reframe.json"), ReframePlan)
         ass_path = ctx.local_path(ctx.clip_key(cand.id, "captions.ass"))
         clip_dir = ass_path.parent
+        if title:
+            titled = clip_dir / ".captions.title.ass"
+            y = self.title_y(ctx, plan)
+            titled.write_text(
+                ass_path.read_text(encoding="utf-8").rstrip("\n")
+                + "\n"
+                + title_event(title, cand.duration, y)
+                + "\n",
+                encoding="utf-8",
+            )
+            ass_path = titled
         log_path = ctx.log_path(self.name, f"-{cand.id}")
         loudnorm = (
             self._measure_loudness(ctx, src, cand, log_path.with_name(log_path.stem + "-loud.log"))
@@ -338,7 +355,28 @@ class RenderStage:
         ctx.commit(thumb_key, thumb_path)
         log.info("render.clip_done", job_id=ctx.job.id, clip_id=cand.id, duration=cand.duration)
 
-    def _write_meta(self, ctx: StageContext, cand: ClipCandidate, transcript: Any) -> str:
+    @staticmethod
+    def overlay_title(ctx: StageContext, metas: list[PlatformClipMeta]) -> str | None:
+        if not ctx.campaign.title_overlay or not metas:
+            return None
+        preferred = next((m for m in metas if m.platform is Platform.youtube), metas[0])
+        return overlay_text(preferred.title) or None
+
+    @staticmethod
+    def title_y(ctx: StageContext, plan: ReframePlan) -> int:
+        """Середина верхней размытой полосы fit_blur; для кропа — ниже интерфейса площадки."""
+        if ctx.campaign.layout is Layout.fit_blur:
+            _, _, _, ch = fit_dims(
+                plan.source_width, plan.source_height,
+                plan.target_width, plan.target_height, ctx.campaign.fit_zoom,
+            )  # fmt: skip
+            band = (plan.target_height - ch) // 2
+            return max(band // 2 + band // 6, 260) if band > 200 else 260
+        return 320
+
+    def _write_meta(
+        self, ctx: StageContext, cand: ClipCandidate, transcript: Any
+    ) -> tuple[str, list[PlatformClipMeta]]:
         clip_text = " ".join(w.text for w in transcript.words if cand.start <= w.start < cand.end)
         meta_key = ctx.clip_key(cand.id, "meta.json")
         meta_hash = config_hash(
@@ -357,7 +395,7 @@ class RenderStage:
                 meta_hash=meta_hash,
             ),  # fmt: skip
         )
-        return meta_key
+        return meta_key, metas
 
     def validate(self, ctx: StageContext, outputs: list[str]) -> None:
         src = ctx.local_path(ctx.key("source.mp4"))

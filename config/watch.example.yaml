@@ -1,0 +1,9 @@
+# cf watch: каналы, новые видео которых сами идут в нарезку.
+# Скопируйте в config/watch.yaml (его нет в git) и запустите: .venv/bin/cf watch --every 6h
+sources:
+  - url: https://www.youtube.com/@example-cs-channel/videos
+    campaign: cs2
+    min_views: 20000        # не брать слабые видео
+    max_new: 2              # не больше 2 новых за проверку
+    min_minutes: 10
+    max_minutes: 180

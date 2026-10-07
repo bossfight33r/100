@@ -10,7 +10,7 @@ import yaml
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from clipfactory.schemas import Account, Campaign
+from clipfactory.schemas import Account, Campaign, WatchSource
 
 
 class ConfigError(Exception):
@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     campaigns_dir: Path = Path("config/campaigns")
     accounts_file: Path = Path("config/accounts.yaml")
+    watch_file: Path = Path("config/watch.yaml")  # cf watch; шаблон — watch.example.yaml
 
     storage: Literal["local", "s3"] = "local"
     s3_bucket: str | None = None
@@ -179,4 +180,21 @@ def load_accounts(path: Path) -> dict[str, Account]:
         if account.id in result:
             raise ConfigError(f"{path}: duplicate account id {account.id!r}")
         result[account.id] = account
+    return result
+
+
+def load_watch(path: Path) -> list[WatchSource]:
+    """Источники cf watch. Нет файла — пустой список (наблюдение включается явно)."""
+    if not path.exists():
+        return []
+    data = _read_yaml(path) or {}
+    items = data.get("sources", []) if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        raise ConfigError(f"{path}: expected 'sources' list")
+    result = []
+    for item in items:
+        try:
+            result.append(WatchSource.model_validate(item))
+        except ValueError as e:
+            raise ConfigError(f"{path}: {e}") from e
     return result

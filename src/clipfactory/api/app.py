@@ -69,8 +69,11 @@ class RetryRequest(BaseModel):
 # ---------------------------------------------------------------- app factory
 
 
-def create_app(app: Any, token: str) -> FastAPI:
-    """``app`` — clipfactory.services.App. Токен обязателен (пустой — ошибка конфигурации)."""
+def create_app(app: Any, token: str, *, lister: Any = None, prober: Any = None) -> FastAPI:
+    """``app`` — clipfactory.services.App. Токен обязателен (пустой — ошибка конфигурации).
+
+    lister/prober — сеть для /discover и /watch (по умолчанию yt-dlp; в тестах — подмена).
+    """
     if not token or len(token) < 16:
         raise ValueError("API token must be at least 16 characters")
     api = FastAPI(title="ClipFactory API", version=__version__, docs_url=None, redoc_url=None)
@@ -281,6 +284,74 @@ def create_app(app: Any, token: str) -> FastAPI:
     @api.get("/report", dependencies=protected)
     def report(campaign_id: str | None = None, top: int = Query(10, ge=1, le=100)):
         return build_report(app, campaign_id=campaign_id, top=top).model_dump(mode="json")
+
+    # ------------------------------------------------------------ sources / signals
+
+    def _lister() -> Any:
+        from clipfactory.backends.downloader.discover import list_videos_ytdlp
+
+        return lister or list_videos_ytdlp
+
+    @api.get("/discover", dependencies=protected)
+    def discover_sources(
+        url: str = Query(pattern=r"^https?://\S+$"),
+        limit: int = Query(30, ge=1, le=200),
+        min_minutes: float = Query(5, ge=0),
+        max_minutes: float = Query(240, gt=0),
+        heatmap: bool = False,
+        include_processed: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Видео канала/плейлиста без скачивания (сеть; heatmap — запрос на каждое видео)."""
+        from clipfactory.backends.downloader import DownloadError
+        from clipfactory.backends.downloader.discover import probe_video_ytdlp
+        from clipfactory.discover import discover
+
+        try:
+            found = discover(
+                url, lister=_lister(), prober=(prober or probe_video_ytdlp) if heatmap else None,
+                limit=limit, min_sec=min_minutes * 60, max_sec=max_minutes * 60,
+                seen=app.db.job_sources(), include_processed=include_processed,
+            )  # fmt: skip
+        except DownloadError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+        return [c.model_dump(mode="json") for c in found]
+
+    @api.get("/watch", dependencies=protected)
+    def watch_sources() -> list[dict[str, Any]]:
+        from clipfactory.config import load_watch
+
+        return [w.model_dump(mode="json") for w in load_watch(app.settings.watch_file)]
+
+    @api.post("/watch/check", dependencies=protected)
+    def watch_check() -> list[dict[str, Any]]:
+        """Одна проверка всех источников config/watch.yaml; новые видео — в очередь."""
+        from clipfactory.config import load_watch
+        from clipfactory.watch import check_all
+
+        results = check_all(app, load_watch(app.settings.watch_file), _lister())
+        return [
+            {"url": r.source.url, "campaign": r.source.campaign, "error": r.error,
+             "queued": [{"job_id": j, "url": u} for j, u in r.queued]}
+            for r in results
+        ]  # fmt: skip
+
+    @api.get("/jobs/{job_id}/signals", dependencies=protected)
+    def job_signals(job_id: str) -> dict[str, Any]:
+        """Ряды сигналов select (signals/hybrid) с шагом 1 с и выбранные клипы."""
+        from clipfactory.schemas import Highlights, SignalsTrace
+
+        app.db.get_job(job_id)  # 404, если job нет
+        with app.storage.open_read(f"jobs/{job_id}/signals.json") as f:
+            trace = SignalsTrace.model_validate_json(f.read())
+        clips: list[dict[str, Any]] = []
+        hl_key = f"jobs/{job_id}/highlights.json"
+        if app.storage.exists(hl_key):
+            with app.storage.open_read(hl_key) as f:
+                clips = [
+                    c.model_dump(mode="json")
+                    for c in Highlights.model_validate_json(f.read()).candidates
+                ]
+        return {"trace": trace.model_dump(mode="json"), "clips": clips}
 
     return api
 

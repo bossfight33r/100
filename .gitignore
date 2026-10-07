@@ -13,3 +13,4 @@ build/
 *.wav
 *.mov
 *.mkv
+config/watch.yaml

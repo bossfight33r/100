@@ -304,7 +304,9 @@ def select_highlights(
     chunk_sec: float,
     overlap_sec: float,
     max_tokens: int = 16000,
+    sig: Any = None,
 ) -> list[ClipCandidate]:
+    """sig (signals.Signals) — гибрид (ADR-0017): пики в промпте и вес сигнала в оценке."""
     template = Template(load_prompt("highlights.md"))
     system = template.substitute(
         clip_min_sec=int(campaign.clip_min_sec),
@@ -318,12 +320,42 @@ def select_highlights(
             f"CHUNK_RANGE: {chunk.start:.2f}-{chunk.end:.2f}\n"
             f"Transcript (format: [start-end] text, seconds):\n{chunk.text}"
         )
+        if sig is not None:
+            prompt += peak_hint(sig, chunk.start, chunk.end)
         raw.extend(ask_llm(llm, system, prompt, chunk.start, chunk.end, max_tokens))
-    refined = dedupe(refine(raw, transcript, campaign))
+    refined = refine(raw, transcript, campaign)
+    if sig is not None:
+        refined = [rescore(c, sig) for c in refined]
+    refined = dedupe(refined)
     top = sorted(refined, key=lambda c: (-c.score, c.start))[: campaign.clip_count]
     # id по хронологии: c01, c02... — стабильные и читаемые
     ordered = sorted(top, key=lambda c: c.start)
     return [c.model_copy(update={"id": f"c{n:02d}"}) for n, c in enumerate(ordered, 1)]
+
+
+HYBRID_SIGNAL_SHARE = 0.3  # доля сигнала в итоговой оценке гибрида
+
+
+def peak_hint(sig: Any, start: float, end: float) -> str:
+    from clipfactory.pipeline import signals
+
+    found = signals.peaks(sig, start, end)
+    if not found:
+        return ""
+    lines = "\n".join(f"- {t:.1f}s strength {v:.2f} ({lead})" for t, v, lead in found)
+    return (
+        "\n\nAudience/engagement peaks in this range (audio spikes, chat bursts, "
+        "most-replayed parts). Strongly prefer clips whose climax lands on one of them, "
+        "but only if the speech around it also works as a clip:\n" + lines
+    )
+
+
+def rescore(cand: ClipCandidate, sig: Any) -> ClipCandidate:
+    from clipfactory.pipeline import signals
+
+    strength = signals.window_strength(sig, cand.start, cand.end)
+    score = (1 - HYBRID_SIGNAL_SHARE) * cand.score + HYBRID_SIGNAL_SHARE * 100 * strength
+    return cand.model_copy(update={"score": int(round(min(max(score, 0), 100)))})
 
 
 class SelectStage:
@@ -352,11 +384,25 @@ class SelectStage:
             "clip_count": c.clip_count,
             "notes": c.notes,
             "chunk": [ctx.settings.chunk_seconds, ctx.settings.chunk_overlap_seconds],
+            **self.hybrid_config(ctx),
+        }
+
+    @staticmethod
+    def hybrid_config(ctx: StageContext) -> dict[str, Any]:
+        if ctx.campaign.selection is not SelectionMode.hybrid:
+            return {}  # ключи только для гибрида: кеш transcript-кампаний не меняется
+        from clipfactory.pipeline import signals
+
+        return {
+            "selection": "hybrid",
+            "signals_version": signals.SIGNALS_VERSION,
+            "weights": signals.WEIGHTS,
+            "signal_share": HYBRID_SIGNAL_SHARE,
         }
 
     def input_keys(self, ctx: StageContext) -> list[str]:
         keys = [ctx.key("transcript.json")]
-        if ctx.campaign.selection is SelectionMode.signals:
+        if ctx.campaign.selection is not SelectionMode.transcript:
             keys.append(ctx.key("audio.wav"))
             for name in ("source.info.json", "chat.json"):
                 if ctx.storage.exists(ctx.key(name)):
@@ -367,6 +413,11 @@ class SelectStage:
         transcript = ctx.read_model(ctx.key("transcript.json"), Transcript)
         if ctx.campaign.selection is SelectionMode.signals:
             return self._run_signals(ctx, transcript)
+        sig = None
+        outputs: list[str] = []
+        if ctx.campaign.selection is SelectionMode.hybrid:
+            sig, _ = self._signals(ctx)
+            outputs.append(ctx.key("signals.json"))
         candidates = select_highlights(
             transcript,
             ctx.campaign,
@@ -374,25 +425,34 @@ class SelectStage:
             chunk_sec=ctx.settings.chunk_seconds,
             overlap_sec=ctx.settings.chunk_overlap_seconds,
             max_tokens=ctx.settings.llm_max_tokens,
+            sig=sig,
         )
         if not candidates:
             raise NoHighlightsError("LLM returned no usable highlights for this video")
         key = ctx.key("highlights.json")
         ctx.write_model(key, Highlights(candidates=candidates))
-        return StageResult(stage=self.name, outputs=[key], info={"clips": len(candidates)})
+        return StageResult(
+            stage=self.name, outputs=[key, *outputs], info={"clips": len(candidates)}
+        )
 
-    def _run_signals(self, ctx: StageContext, transcript: Transcript) -> StageResult:
-        """Без LLM: пики звука и «Most replayed» (ADR-0014). LLM пишет только метаданные."""
+    def _signals(self, ctx: StageContext) -> tuple[Any, SourceInfo | None]:
+        """Ряды сигналов + signals.json (пишется и при неудаче выбора — видно, почему)."""
         from clipfactory.pipeline import signals
 
         info_key = ctx.key("source.info.json")
         info = ctx.read_model(info_key, SourceInfo) if ctx.storage.exists(info_key) else None
         chat_key = ctx.key("chat.json")
         chat = ctx.read_model(chat_key, ChatActivity) if ctx.storage.exists(chat_key) else None
-        wav = ctx.local_path(ctx.key("audio.wav"))
-        sig = signals.build_signals(wav, info, chat=chat)
+        sig = signals.build_signals(ctx.local_path(ctx.key("audio.wav")), info, chat=chat)
+        ctx.write_model(ctx.key("signals.json"), signals.trace(sig))
+        return sig, info
+
+    def _run_signals(self, ctx: StageContext, transcript: Transcript) -> StageResult:
+        """Без LLM: пики звука и «Most replayed» (ADR-0014). LLM пишет только метаданные."""
+        from clipfactory.pipeline import signals
+
+        sig, info = self._signals(ctx)
         trace_key = ctx.key("signals.json")
-        ctx.write_model(trace_key, signals.trace(sig))  # и при неудаче: видно, почему пусто
         duration = transcript.duration or sig.length * sig.hop
         picked = signals.pick_windows(
             sig, ctx.campaign, duration, words=transcript.words, info=info

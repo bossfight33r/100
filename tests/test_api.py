@@ -134,3 +134,57 @@ def test_cancel_and_retry_rules(app, client):
     app.db.set_job_status(job.id, JobStatus.published)
     assert client.post(f"/jobs/{job.id}/retry", headers=AUTH).status_code == 400  # нечего повторять
     assert client.post(f"/jobs/{job.id}/cancel", headers=AUTH).status_code == 400  # уже не идёт
+
+
+# ---------------------------------------------------------------- discover / watch / signals
+
+
+def _entries(url, limit):
+    return [
+        {"id": f"v{i}", "ie_key": "Youtube", "title": f"V{i}", "duration": 900,
+         "view_count": 1000 * i}
+        for i in range(1, 4)
+    ][:limit]  # fmt: skip
+
+
+def test_discover_watch_and_signals_endpoints(app, tmp_path, monkeypatch):
+    import numpy as np
+
+    from clipfactory.backends.downloader import DownloadError
+    from clipfactory.pipeline import signals
+    from clipfactory.schemas import ClipCandidate, Highlights
+
+    client = TestClient(create_app(app, TOKEN, lister=_entries))
+    assert client.get("/discover", params={"url": "x"}, headers=AUTH).status_code == 422
+    r = client.get("/discover", params={"url": "https://youtube.com/@c"}, headers=AUTH)
+    assert [v["title"] for v in r.json()] == ["V3", "V2", "V1"]
+
+    def broken(url, limit):
+        raise DownloadError("HTTP 404")
+
+    bad = TestClient(create_app(app, TOKEN, lister=broken))
+    r = bad.get("/discover", params={"url": "https://youtube.com/@c"}, headers=AUTH)
+    assert r.status_code == 502 and "404" in r.json()["detail"]
+
+    watch = tmp_path / "watch.yaml"
+    watch.write_text(
+        "sources:\n  - url: https://youtube.com/@c\n    campaign: fast\n    max_new: 1\n",
+        encoding="utf-8",
+    )
+    app.settings.watch_file = watch
+    monkeypatch.setattr(app, "enqueue_job", lambda job_id, **kw: None)
+    assert client.get("/watch", headers=AUTH).json()[0]["campaign"] == "fast"
+    [res] = client.post("/watch/check", headers=AUTH).json()
+    assert res["error"] is None and res["queued"][0]["url"].endswith("v3")
+
+    job_id = res["queued"][0]["job_id"]
+    assert client.get(f"/jobs/{job_id}/signals", headers=AUTH).status_code == 404
+    sig = signals.Signals(hop=0.5, series={"audio": np.r_[np.zeros(10), np.ones(4)]})
+    app.storage.put_bytes(
+        f"jobs/{job_id}/signals.json", signals.trace(sig).model_dump_json().encode()
+    )
+    hl = Highlights(candidates=[ClipCandidate(id="c01", start=1, end=6, score=50)])
+    app.storage.put_bytes(f"jobs/{job_id}/highlights.json", hl.model_dump_json().encode())
+    body = client.get(f"/jobs/{job_id}/signals", headers=AUTH).json()
+    assert body["trace"]["series"]["audio"][-1] == 1.0 and body["clips"][0]["id"] == "c01"
+    assert client.get("/jobs/nope/signals", headers=AUTH).status_code == 404

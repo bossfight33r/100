@@ -112,3 +112,38 @@ def test_crop_layout_cache_keys_unchanged(tmp_path, synthetic_video):
     ctx = app.context(app.create_job(str(synthetic_video), "example"))
     assert set(ReframeStage().config(ctx)) == {"face", "analysis_fps", "params", "overrides"}
     assert RenderStage.layout_config(ctx) == {}
+
+
+def test_overlay_text_cleanup():
+    from clipfactory.pipeline.captions import overlay_text, title_event
+
+    assert overlay_text("Клатч 1v4 🔥 #cs2 #shorts") == "Клатч 1v4"
+    long = overlay_text("Очень длинный заголовок " * 6)
+    assert len(long) <= 60 and long.endswith("…") and "  " not in long
+    ev = title_event("{\\pos(0,0)} взлом", 10, 437)
+    assert ev.count("{") == 1 and "\\pos(540,437)" in ev and "0:00:10.00" in ev
+
+
+def test_title_y_inside_blurred_band(tmp_path, synthetic_video):
+    from clipfactory.schemas import PlatformClipMeta, ReframePlan
+
+    cdir = tmp_path / "campaigns"
+    cdir.mkdir()
+    (cdir / "gameplay.yaml").write_text(FIT_CAMPAIGN + "title_overlay: true\n", encoding="utf-8")
+    app = make_app(tmp_path, campaigns_dir=cdir)
+    ctx = app.context(app.create_job(str(synthetic_video), "gameplay"))
+    plan = ReframePlan(
+        source_width=1920, source_height=1080,
+        keyframes=[CropKeyframe(t=0, x=0, y=0, w=606, h=1080)],
+    )  # fmt: skip
+    y = RenderStage.title_y(ctx, plan)
+    band = (1920 - fit_dims(1920, 1080, 1080, 1920, 1.2)[3]) // 2
+    assert 200 < y < band - 60
+    metas = [
+        PlatformClipMeta(platform="tiktok", title="tt", description=""),
+        PlatformClipMeta(platform="youtube", title="Эйс #cs2", description=""),
+    ]
+    assert RenderStage.overlay_title(ctx, metas) == "Эйс"
+    off = make_app(tmp_path / "off")
+    ctx_off = off.context(off.create_job(str(synthetic_video), "example"))
+    assert RenderStage.overlay_title(ctx_off, metas) is None
