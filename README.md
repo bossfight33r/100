@@ -33,6 +33,16 @@ CF_TRANSCRIBER=fake CF_LLM_PROVIDER=fake CF_FACE_DETECTOR=fake \
 
 Результат лежит в `data/jobs/<JOB_ID>/clips/<clip_id>/final.mp4`.
 
+### Игры и стримы (CS2 и т.п.)
+
+Моменты ищутся без Whisper: по всплескам звука и кривой YouTube «Most replayed» (ADR-0014).
+
+```bash
+.venv/bin/cf run "https://youtu.be/..." --campaign cs2   # config/campaigns/cs2.yaml
+```
+
+`selection: signals` + `transcribe: false` в кампании. Если стример говорит и нужны субтитры — `transcribe: true`.
+
 ## Команды `cf`
 
 | Команда | Что делает |

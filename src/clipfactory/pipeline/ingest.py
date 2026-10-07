@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from clipfactory.backends.downloader import (
+    SOURCE_INFO_NAME,
     Downloader,
     DownloadError,
     download_http,
@@ -17,7 +18,7 @@ from clipfactory.media import ffmpeg
 from clipfactory.media.models import MediaInfo
 from clipfactory.media.probe import ProbeError, probe
 from clipfactory.pipeline.context import SourceError, StageContext, ValidationFailed
-from clipfactory.schemas import StageName, StageResult
+from clipfactory.schemas import SourceInfo, StageName, StageResult
 from clipfactory.storage.local import sha256_file
 
 log = get_logger(__name__)
@@ -128,9 +129,13 @@ class IngestStage:
         else:
             ctx.storage.put_file(out_key, fetched)
 
+        outputs = [out_key]
+        info_key = self._store_source_info(ctx)
+        if info_key:
+            outputs.append(info_key)
         return StageResult(
             stage=self.name,
-            outputs=[out_key],
+            outputs=outputs,
             info={
                 # без перекодирования source.mp4 — копия источника: его хеш LocalStorage
                 # кеширует и переиспользует для манифеста, повторного чтения файла нет
@@ -142,6 +147,22 @@ class IngestStage:
                 "has_audio": info.audio is not None,
             },
         )
+
+    def _store_source_info(self, ctx: StageContext) -> str | None:
+        """source.info.json от загрузчика (heatmap, главы) — необязательный выход."""
+        raw = ctx.scratch / "download" / SOURCE_INFO_NAME
+        key = ctx.key("source.info.json")
+        ctx.storage.delete(key)  # не оставлять кривую от прошлой загрузки
+        if not is_url(ctx.job.source) or not raw.is_file():
+            return None
+        try:
+            info = SourceInfo.model_validate_json(raw.read_bytes())
+        except ValueError as e:
+            log.warning("ingest.source_info_invalid", job_id=ctx.job.id, error=str(e)[:200])
+            return None
+        ctx.write_model(key, info)
+        log.info("ingest.source_info", job_id=ctx.job.id, heatmap_points=len(info.heatmap))
+        return key
 
     def validate(self, ctx: StageContext, outputs: list[str]) -> None:
         path = ctx.local_path(ctx.key("source.mp4"))

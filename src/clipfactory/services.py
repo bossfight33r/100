@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import urllib.parse
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -14,7 +15,7 @@ from clipfactory.backends.face.base import FaceDetector
 from clipfactory.backends.llm.base import LLMProvider
 from clipfactory.backends.transcriber.base import Transcriber
 from clipfactory.compute.capabilities import TaskRequirements
-from clipfactory.config import Settings
+from clipfactory.config import ConfigError, Settings
 from clipfactory.db import Database
 from clipfactory.log import get_logger
 from clipfactory.pipeline.context import Backends, StageContext
@@ -81,6 +82,27 @@ def build_llm(settings: Settings) -> LLMProvider:
 
     key = settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else None
     return AnthropicLLM(settings.llm_model, api_key=key, effort=settings.llm_effort)
+
+
+def llm_config_problem(settings: Settings) -> str | None:
+    """Проверка настроек LLM без сети — до ingest/transcribe, а не через 20 минут на select."""
+    p = settings.llm_provider
+    if p == "anthropic" and not settings.anthropic_api_key:
+        return (
+            "CF_LLM_PROVIDER=anthropic, но ANTHROPIC_API_KEY пуст. Задайте ключ в .env "
+            "или другой провайдер (CF_LLM_PROVIDER=openai_compat + CF_LLM_BASE_URL/"
+            "CF_LLM_MODEL/CF_LLM_API_KEY)"
+        )
+    if p == "openai_compat":
+        if not settings.llm_base_url:
+            return "CF_LLM_PROVIDER=openai_compat требует CF_LLM_BASE_URL"
+        if not settings.llm_model:
+            return "CF_LLM_PROVIDER=openai_compat требует CF_LLM_MODEL"
+        host = urllib.parse.urlparse(settings.llm_base_url).hostname or ""
+        local = host in {"localhost", "127.0.0.1", "::1"}
+        if not settings.llm_api_key and not local:
+            return f"CF_LLM_API_KEY пуст, а {host} — внешний сервис"
+    return None
 
 
 def build_face(settings: Settings) -> FaceDetector:
@@ -171,6 +193,8 @@ class App:
 
     def create_job(self, source: str, campaign_id: str) -> Job:
         self.settings.campaign(campaign_id)  # валидация id
+        if self.llm_factory is None and (problem := llm_config_problem(self.settings)):
+            raise ConfigError(problem)
         if not is_url(source):
             source = str(Path(source).expanduser().resolve())
         job = Job(

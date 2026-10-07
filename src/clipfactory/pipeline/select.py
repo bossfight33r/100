@@ -1,5 +1,7 @@
 """select: transcript.json -> highlights.json.
 
+Кампания `selection: signals` выбирает без LLM по сигналам (pipeline/signals.py, ADR-0014).
+
 Чанки ~20 мин с overlap ~60 сек -> LLM -> нормализация -> дедуп по overlap ->
 подгонка границ по словам и паузам -> clip_min/max -> top-N.
 Идеи промпта, чанкинга и дедупа — из AI-Youtube-Shorts-Generator (MIT, см. NOTICE).
@@ -21,6 +23,8 @@ from clipfactory.schemas import (
     Campaign,
     ClipCandidate,
     Highlights,
+    SelectionMode,
+    SourceInfo,
     StageName,
     StageResult,
     Transcript,
@@ -327,6 +331,18 @@ class SelectStage:
 
     def config(self, ctx: StageContext) -> dict[str, Any]:
         c = ctx.campaign
+        if c.selection is SelectionMode.signals:
+            from clipfactory.pipeline import signals
+
+            return {
+                "selection": c.selection.value,
+                "signals_version": signals.SIGNALS_VERSION,
+                "weights": signals.WEIGHTS,
+                "hop": signals.HOP,
+                "clip_min_sec": c.clip_min_sec,
+                "clip_max_sec": c.clip_max_sec,
+                "clip_count": c.clip_count,
+            }
         return {
             "llm": ctx.backends.identity("llm"),
             "prompt_sha": hashlib.sha256(load_prompt("highlights.md").encode()).hexdigest(),
@@ -338,10 +354,17 @@ class SelectStage:
         }
 
     def input_keys(self, ctx: StageContext) -> list[str]:
-        return [ctx.key("transcript.json")]
+        keys = [ctx.key("transcript.json")]
+        if ctx.campaign.selection is SelectionMode.signals:
+            keys.append(ctx.key("audio.wav"))
+            if ctx.storage.exists(ctx.key("source.info.json")):
+                keys.append(ctx.key("source.info.json"))
+        return keys
 
     def run(self, ctx: StageContext) -> StageResult:
         transcript = ctx.read_model(ctx.key("transcript.json"), Transcript)
+        if ctx.campaign.selection is SelectionMode.signals:
+            return self._run_signals(ctx, transcript)
         candidates = select_highlights(
             transcript,
             ctx.campaign,
@@ -355,6 +378,33 @@ class SelectStage:
         key = ctx.key("highlights.json")
         ctx.write_model(key, Highlights(candidates=candidates))
         return StageResult(stage=self.name, outputs=[key], info={"clips": len(candidates)})
+
+    def _run_signals(self, ctx: StageContext, transcript: Transcript) -> StageResult:
+        """Без LLM: пики звука и «Most replayed» (ADR-0014). LLM пишет только метаданные."""
+        from clipfactory.pipeline import signals
+
+        info_key = ctx.key("source.info.json")
+        info = ctx.read_model(info_key, SourceInfo) if ctx.storage.exists(info_key) else None
+        wav = ctx.local_path(ctx.key("audio.wav"))
+        sig = signals.build_signals(wav, info)
+        duration = transcript.duration or sig.length * sig.hop
+        picked = signals.pick_windows(
+            sig, ctx.campaign, duration, words=transcript.words, info=info
+        )
+        top = sorted(dedupe(picked), key=lambda c: (-c.score, c.start))[: ctx.campaign.clip_count]
+        if not top:
+            raise NoHighlightsError(
+                "no signal peaks found (quiet audio, no YouTube heatmap or video too short)"
+            )
+        ordered = sorted(top, key=lambda c: c.start)
+        candidates = [c.model_copy(update={"id": f"c{n:02d}"}) for n, c in enumerate(ordered, 1)]
+        key = ctx.key("highlights.json")
+        ctx.write_model(key, Highlights(candidates=candidates))
+        return StageResult(
+            stage=self.name,
+            outputs=[key],
+            info={"clips": len(candidates), "signals": sorted(sig.series)},
+        )
 
     def validate(self, ctx: StageContext, outputs: list[str]) -> None:
         h = ctx.read_model(ctx.key("highlights.json"), Highlights)

@@ -100,6 +100,11 @@ class Account(_Model):
         return v
 
 
+class SelectionMode(StrEnum):
+    transcript = "transcript"  # LLM по тексту речи (подкасты, интервью)
+    signals = "signals"  # пики звука и YouTube «Most replayed» (игры, стримы) — ADR-0014
+
+
 class Campaign(_Model):
     id: str
     name: str
@@ -114,12 +119,44 @@ class Campaign(_Model):
     forbidden: list[str] = Field(default_factory=list)
     notes: str = ""
     accounts: list[str] = Field(default_factory=list)
+    selection: SelectionMode = SelectionMode.transcript
+    transcribe: bool = True  # False — без Whisper и без субтитров (только для selection: signals)
 
     @model_validator(mode="after")
     def _durations(self) -> Campaign:
         if self.clip_min_sec > self.clip_max_sec:
             raise ValueError("clip_min_sec must be <= clip_max_sec")
+        if not self.transcribe and self.selection is SelectionMode.transcript:
+            raise ValueError("transcribe: false requires selection: signals")
         return self
+
+
+# ---------------------------------------------------------------- source metadata
+
+
+class HeatPoint(_Model):
+    """Точка кривой YouTube «Most replayed» (поле heatmap у yt-dlp), value 0..1."""
+
+    start_time: float = Field(ge=0)
+    end_time: float = Field(ge=0)
+    value: float = Field(ge=0, le=1)
+
+
+class Chapter(_Model):
+    start_time: float = Field(ge=0)
+    end_time: float = Field(ge=0)
+    title: str = ""
+
+
+class SourceInfo(_Model):
+    """source.info.json: метаданные площадки-источника (сейчас — из yt-dlp)."""
+
+    title: str = ""
+    channel: str = ""
+    duration: float | None = None
+    view_count: int | None = None
+    heatmap: list[HeatPoint] = Field(default_factory=list)
+    chapters: list[Chapter] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------- selection / clips

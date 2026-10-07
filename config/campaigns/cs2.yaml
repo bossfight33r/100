@@ -1,0 +1,16 @@
+# Игровая кампания: моменты по сигналам, без Whisper (ADR-0014, docs/campaigns.md).
+id: cs2
+name: CS2 highlights
+rate_per_1k_views: 1.0
+platforms: [youtube, tiktok]
+clip_min_sec: 15
+clip_max_sec: 45
+clip_count: 8
+language: ru
+selection: signals            # пики звука + YouTube «Most replayed» вместо LLM по тексту
+transcribe: false             # без Whisper и субтитров; true — субтитры, если стример говорит
+must_include_tags: ["#shorts", "#cs2"]
+forbidden: ["казино", "ставки", "кейсы за донат"]
+notes: |
+  Короткие игровые моменты CS2: клатчи, эйсы, мультикиллы, реакции.
+accounts: [yt_main, tt_main]

@@ -18,6 +18,8 @@
 | `forbidden` | list | [] | слова, которых не должно быть в метаданных |
 | `notes` | str | "" | пожелания для LLM при выборе моментов |
 | `accounts` | list | [] | id аккаунтов для публикации |
+| `selection` | enum | `transcript` | как искать моменты: `transcript` — LLM по речи (подкасты); `signals` — пики звука + YouTube «Most replayed», без LLM (игры, стримы; ADR-0014) |
+| `transcribe` | bool | true | `false` — без Whisper и субтитров (только при `selection: signals`) |
 
 ```yaml
 id: example
@@ -34,6 +36,8 @@ forbidden: ["казино"]
 notes: Фокус на практических советах.
 accounts: [yt_main, tt_main]
 ```
+
+Игровая кампания — `config/campaigns/cs2.yaml`: `selection: signals`, `transcribe: false`, клипы 15–45 с (окно ~22 с, пик на 65% клипа). LLM в такой кампании пишет только заголовки и описания.
 
 Доход: `views / 1000 × rate_per_1k_views` по последнему снимку статистики каждой публикации (`cf report`). Итог не хранится — пересчитывается из истории.
 
